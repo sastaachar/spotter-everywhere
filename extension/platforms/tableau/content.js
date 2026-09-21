@@ -36,8 +36,6 @@
   // tokens and store them per install. Empty means the backend calls will 401.
   const BACKEND_API_KEY = '';
 
-  const log = (...a) => console.log('[spotter:tableau]', ...a);
-
   const SPARKLE_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true">' +
     '<path d="M8 1l1.6 4.4L14 7l-4.4 1.6L8 13l-1.6-4.4L2 7l4.4-1.6z"/>' +
@@ -550,7 +548,6 @@
   // into Falcon + build a worksheet -> open panel.html embedding THAT worksheet,
   // authenticated AS the user. Reuses an existing TS user (JIT is idempotent).
   async function openSpotter(context) {
-    log('openSpotter: click', { worksheet: context.worksheet, dashboard: context.dashboard, workbook: context.workbook });
     closePanel();
     const loading = el('aside', FRAME_CLASS + ' ts-spotter-loading');
     loading.textContent = 'Loading this sheet into Spotter…';
@@ -558,7 +555,6 @@
     document.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: context }));
 
     const openPanelFrame = (extra) => {
-      log('openSpotter: opening panel', { worksheetId: extra.worksheetId, userid: extra.userid, loadError: extra.loadError });
       loading.remove();
       const frame = document.createElement('iframe');
       frame.className = FRAME_CLASS;
@@ -571,14 +567,11 @@
     let userid = context.site || 'tableau_user';
     try {
       userid = await resolveUserId(context);
-      log('openSpotter: userid resolved', userid);
       let worksheetId = null;
       let worksheetName = null;
       if (context.worksheet) {
         loading.textContent = 'Loading “' + context.worksheet + '” into ThoughtSpot…';
-        log('openSpotter: fetching underlying data for', context.worksheet);
         const data = await requestWorksheetData(context.worksheet, 'underlying');
-        log('openSpotter: got data', { columns: data.columns.length, rows: data.rows.length, '→ POST /dataset': true });
         const body = await createDataset({
           userid, platform: PLATFORM,
           name: context.sheetTitle || context.worksheet,
@@ -587,13 +580,11 @@
         worksheetId = (body.embed && body.embed.worksheetId)
           || (body.dataset && (body.dataset.worksheetId || body.dataset.tableId));
         worksheetName = body.dataset && (body.dataset.worksheetName || body.dataset.tableName);
-        log('openSpotter: /dataset done', { worksheetId, worksheetName });
       }
       // workspace is the userid the embed authenticates as — keep it equal to the
       // one /dataset provisioned/shared for, so access lines up.
       openPanelFrame({ worksheetId, worksheetName, userid, workspace: userid });
     } catch (err) {
-      log('openSpotter: failed, opening default model —', err.message);
       // Load unavailable — open the panel on the configured default model.
       openPanelFrame({ userid, workspace: userid, loadError: err.message });
     }

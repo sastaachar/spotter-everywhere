@@ -7,8 +7,6 @@ const CREATE_LIVEBOARD = 'spotter:create-liveboard';
 const GET_LIVEBOARD = 'spotter:get-liveboard';
 const EMBED_TOKEN = 'spotter:embed-token';
 
-const log = (...a) => console.log('[spotter:worker]', ...a);
-
 async function createSession(payload) {
   if (!config.backendUrl) return { error: 'No backend configured (see extension/src/config.js).' };
   let res;
@@ -141,7 +139,6 @@ async function embedToken(payload) {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || typeof message.type !== 'string') return false;
-  log('message:', message.type);
   if (message.type === CREATE_SESSION) {
     createSession(message.payload).then(sendResponse, (err) => sendResponse({ error: String((err && err.message) || err) }));
     return true;
