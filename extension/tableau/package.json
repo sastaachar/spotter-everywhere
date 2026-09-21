@@ -1,0 +1,11 @@
+{
+  "name": "@spotter-everywhere/extension-tableau",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare-credentials": "test -f src/dev-credentials.js || cp src/dev-credentials.example.js src/dev-credentials.js",
+    "build": "bun run prepare-credentials && bun build src/panel.js --outdir dist --target browser --minify",
+    "watch": "bun run prepare-credentials && bun build src/panel.js --outdir dist --target browser --watch"
+  }
+}

@@ -26,10 +26,27 @@ so the button survives sheet switches and dashboard interactions.
 
 ## Clicking the button
 
-Opens a right-hand panel stub showing the sheet title, and dispatches a
-`spotter:open` `CustomEvent` on `document` with `{ sheetTitle, url }`. Wire the
-real Spotter experience into `openPanel()` in `content.js`, or listen for the
-event from another script.
+Opens Spotter in a right-hand iframe: `panel.html`, an extension-origin page
+that bundles `ui/spotter-embed` and mounts `TableauSpotterEmbed`. The sheet
+context travels in the URL hash. The page reads the ThoughtSpot host, username,
+password and optional model id from extension storage (set on the options
+page), calls `initSpotter`, and renders. For development you can instead
+hardcode the username and password in `src/dev-credentials.js`, which is
+gitignored and created from `dev-credentials.example.js` on first build; the
+options page values win when set. Without credentials from either place the
+panel says so and links to the options page. Alt+click the button for the older details panel
+(identity, shape, summary and underlying rows, send to backend).
+
+The panel bundle is not committed. Build it before loading the extension:
+
+```
+cd extension/tableau && bun run build     # or bun run watch
+```
+
+It resolves the SDK from `ui/spotter-embed/node_modules`, so run `bun install`
+there first. `web_accessible_resources` exposes `panel.html` and `dist/*` to
+the Tableau host only, and `host_permissions` includes the ThoughtSpot host so
+the token request from the panel page is not subject to CORS.
 
 ## Data bridge
 
@@ -65,7 +82,8 @@ in the payload.
 | `content.js` | Finds title elements, injects the button, renders the panel, asks the bridge for data |
 | `bridge.js` | MAIN-world script in the portal page; reads worksheet data through Tableau's JS API |
 | `background.js` | Service worker; posts sessions to the backend with the stored API key |
-| `options.html`, `options.js` | Settings page for backend URL and API key |
+| `panel.html`, `src/panel.js` | Spotter panel page; `dist/panel.js` is its built bundle |
+| `options.html`, `options.js` | Settings: ThoughtSpot host, username, password, model id; backend URL and API key |
 | `content.css` | Button and panel styles, namespaced with `ts-spotter-` |
 
 ## Development loop

@@ -14,10 +14,20 @@
 <body>
   <h1>Tableau Spotter</h1>
   <form id="form">
+    <h2>ThoughtSpot</h2>
+    <label for="tsHost">Host</label>
+    <input id="tsHost" type="url" placeholder="https://jm-saas-2.internal.thoughtspot.dev">
+    <label for="tsUsername">Username</label>
+    <input id="tsUsername" type="text" autocomplete="off">
+    <label for="tsPassword">Password (development only)</label>
+    <input id="tsPassword" type="password" autocomplete="off">
+    <label for="worksheetId">Model (worksheet) id, optional</label>
+    <input id="worksheetId" type="text" autocomplete="off" placeholder="ThoughtSpot model GUID">
+    <h2>Backend</h2>
     <label for="backendUrl">Backend URL</label>
-    <input id="backendUrl" type="url" placeholder="https://spotter-backend.example" required>
+    <input id="backendUrl" type="url" placeholder="https://spotter-backend.example">
     <label for="apiKey">API key</label>
-    <input id="apiKey" type="password" autocomplete="off" required>
+    <input id="apiKey" type="password" autocomplete="off">
     <button type="submit">Save</button><span id="status"></span>
   </form>
   <script src="options.js"></script>

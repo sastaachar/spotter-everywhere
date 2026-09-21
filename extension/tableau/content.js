@@ -21,6 +21,9 @@
   const UNDERLYING_CHUNK = 500;
   const CREATE_SESSION = 'spotter:create-session';
   const PLATFORM = 'tableau';
+  const FRAME_CLASS = 'ts-spotter-frame';
+  const CLOSE_EVENT = 'spotter:close';
+  const EXTENSION_ORIGIN = new URL(chrome.runtime.getURL('')).origin;
 
   const SPARKLE_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true">' +
@@ -67,10 +70,13 @@
     btn.title = 'Ask Spotter about this sheet';
     btn.setAttribute('aria-label', 'Open Spotter');
     btn.innerHTML = SPARKLE_SVG + '<span>Spotter</span>';
+    btn.title = 'Ask Spotter about this sheet (Alt+click for sheet details)';
     btn.addEventListener('click', (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
-      openPanel(vizContext(titleRoot, sheetTitle()));
+      const context = vizContext(titleRoot, sheetTitle());
+      if (ev.altKey) openPanel(context);
+      else openSpotter(context);
     });
     btn.addEventListener('mousedown', (ev) => ev.stopPropagation());
     return btn;
@@ -340,7 +346,22 @@
 
   function closePanel() {
     document.querySelectorAll('.' + PANEL_CLASS).forEach((el) => el.remove());
+    document.querySelectorAll('.' + FRAME_CLASS).forEach((el) => el.remove());
   }
+
+  function openSpotter(context) {
+    closePanel();
+    const frame = document.createElement('iframe');
+    frame.className = FRAME_CLASS;
+    frame.title = 'Spotter';
+    frame.src = chrome.runtime.getURL('panel.html') + '#' + encodeURIComponent(JSON.stringify(context));
+    document.body.appendChild(frame);
+    document.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: context }));
+  }
+
+  window.addEventListener('message', (ev) => {
+    if (ev.origin === EXTENSION_ORIGIN && ev.data && ev.data.type === CLOSE_EVENT) closePanel();
+  });
 
   let scanTimer = null;
   function scheduleScan() {
