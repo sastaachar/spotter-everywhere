@@ -7,7 +7,7 @@ import { rateLimit } from './rate-limit';
 import { SessionStore, ValidationError, parseSessionInput, summarize } from './session';
 import { extractTwbXml, parseTableauColumns } from './tableau';
 import { generateTml, generateWorksheetOnTable } from './tml';
-import { importTml, findGuid, ensureUser, findMetadataId, mintUserToken, sanitizeUsername, shareMetadata } from './thoughtspot';
+import { importTml, findGuid, ensureUser, findMetadataId, mintUserToken, sanitizeUsername, shareMetadata, addUserToGroups } from './thoughtspot';
 import { rowsToCsv } from './csv';
 import { uploadCsvDataset, deleteTable } from './userdata';
 
@@ -142,6 +142,15 @@ export function createApp(options: AppOptions) {
         email,
         displayName: `${userid} (${platform})`,
       });
+      // auto_create only assigns groups to NEW users; ensure membership for
+      // existing users too (idempotent ADD) so they keep the Spotter privilege.
+      if (options.tsToken && options.tsUserGroups?.length) {
+        try {
+          await addUserToGroups({ host: options.tsHost, token: options.tsToken }, username, options.tsUserGroups);
+        } catch (e) {
+          console.error(`ensure groups for ${username} failed:`, (e as Error).message);
+        }
+      }
       return c.json({ token, username });
     } catch (e) {
       return c.json({ error: 'token_failed', detail: (e as Error).message }, 502);
