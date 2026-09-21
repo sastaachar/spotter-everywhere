@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Tableau Spotter",
+  "version": "0.1.0",
+  "description": "Adds a Spotter button to Tableau Cloud sheet titles.",
+  "host_permissions": ["https://prod-in-a.online.tableau.com/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://prod-in-a.online.tableau.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
+}
