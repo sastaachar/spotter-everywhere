@@ -1,5 +1,7 @@
 # ui/spotter
 
-Spotter UI shown to the user on top of the host BI tool. Consumes sessions from
-`../../backend` and is loaded by the extensions in `../../extension`. Stack not
-chosen yet.
+The extension UI. The Spotter panel that opens on top of the host BI tool
+(Tableau, Power BI, ...) is built here as one shared front end, and each
+extension in `../../extension/*` loads it instead of rendering its own panel.
+It reads sessions from `../../backend`. Stack not chosen yet; the current
+panel in `extension/tableau/content.js` is the placeholder it replaces.
