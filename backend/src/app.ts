@@ -537,10 +537,18 @@ export function createApp(options: AppOptions) {
     const worksheetName = baseName;
     if (dataset.loaded && dataset.columns.length && tableId) {
       try {
-        const wsTml = generateWorksheetOnTable(worksheetName, tableName, dataset.columns);
-        const imp = await importTml(tsEnv, [wsTml]);
-        worksheetId = findGuid(imp, worksheetName) ?? (await findMetadataId(tsEnv, worksheetName, 'LOGICAL_TABLE'));
-        if (!worksheetId) worksheetError = `import returned no guid: ${JSON.stringify(imp).slice(0, 400)}`;
+        // Reuse the worksheet when it already exists. Importing the TML again
+        // creates ANOTHER worksheet of the same name rather than replacing it,
+        // and the extension could then be pointed at any one of them. The table
+        // underneath was just reloaded in place, so the existing worksheet
+        // already serves the rows we just extracted.
+        worksheetId = await findMetadataId(tsEnv, worksheetName, 'LOGICAL_TABLE');
+        if (!worksheetId) {
+          const wsTml = generateWorksheetOnTable(worksheetName, tableName, dataset.columns);
+          const imp = await importTml(tsEnv, [wsTml]);
+          worksheetId = findGuid(imp, worksheetName) ?? (await findMetadataId(tsEnv, worksheetName, 'LOGICAL_TABLE'));
+          if (!worksheetId) worksheetError = `import returned no guid: ${JSON.stringify(imp).slice(0, 400)}`;
+        }
       } catch (e) {
         worksheetError = (e as Error).message;
         console.error('worksheet wrap failed:', worksheetError);

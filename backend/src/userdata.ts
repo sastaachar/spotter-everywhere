@@ -13,6 +13,7 @@
 // `loaddata` is the separate re-sync path (append/replace into an existing
 // table); `delete/{id}` removes the table.
 import type { TsEnv } from './thoughtspot';
+import { findMetadataId } from './thoughtspot';
 
 const BASE = '/callosum/v1/userdata';
 
@@ -163,6 +164,24 @@ export async function uploadCsvDataset(
     throw new Error(`readcolumns failed: ${JSON.stringify(read.errors ?? []).slice(0, 300)}`);
   }
   const schema: CsvSchema = { ...read.schema, cacheToken, tableName };
+
+  // Refresh in place when this table already exists. createtable does NOT
+  // replace a same-named table — it adds another one with the same name, and
+  // the worksheet TML binds its table BY NAME, so it can resolve to an older
+  // copy and serve stale rows. Re-syncing with dropexistingdata keeps one
+  // table, one id, and guarantees the rows are the ones just extracted.
+  const existingId = await findMetadataId(env, tableName);
+  if (existingId) {
+    const reloaded = (await loadData(env, existingId, cacheToken, true, true)) as SchemaAndErrors;
+    return {
+      cacheToken,
+      tableId: existingId,
+      tableName,
+      columns: reloaded?.schema?.columns ?? read.schema?.columns ?? [],
+      loaded: reloaded?.status ?? true,
+      errors: reloaded?.errors,
+    };
+  }
 
   const created = await createTable(env, schema);
   return {
