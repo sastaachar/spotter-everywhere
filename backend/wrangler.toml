@@ -1,0 +1,13 @@
+name = "spotter-everywhere-backend"
+main = "src/worker.ts"
+compatibility_date = "2026-09-21"
+# node:crypto + Buffer are used by auth.ts; nodejs_compat provides them on Workers.
+compatibility_flags = ["nodejs_compat"]
+
+# Non-secret defaults. Set secrets (never commit) with:
+#   npx wrangler secret put SPOTTER_API_KEY   # the extension's bearer key
+#   npx wrangler secret put TS_TOKEN          # the tsadmin token — server-only
+[vars]
+TS_HOST = ""             # e.g. https://my-cluster.thoughtspot.cloud (enables provision + import)
+TS_USER_PREFIX = ""      # optional namespace for provisioned users, e.g. "tableau_"
+TS_ACCOUNT_TYPE = "LOCAL_USER"  # LOCAL_USER | SAML_USER | OIDC_USER | LDAP_USER

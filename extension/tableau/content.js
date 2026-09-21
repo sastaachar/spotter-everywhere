@@ -25,6 +25,13 @@
   const CLOSE_EVENT = 'spotter:close';
   const EXTENSION_ORIGIN = new URL(chrome.runtime.getURL('')).origin;
 
+  // Backend that turns a Tableau workbook into a Spotter-searchable worksheet.
+  // Point this at the local Worker (wrangler dev) or the deployed Cloudflare URL.
+  const BACKEND_URL = 'http://localhost:8799';
+  // Dev only. Do NOT ship a shared key in a real extension — issue per-user
+  // tokens and store them per install. Empty means the backend calls will 401.
+  const BACKEND_API_KEY = '';
+
   const SPARKLE_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true">' +
     '<path d="M8 1l1.6 4.4L14 7l-4.4 1.6L8 13l-1.6-4.4L2 7l4.4-1.6z"/>' +
@@ -318,6 +325,58 @@
     );
   }
 
+  // POST a Tableau workbook (.twb/.twbx) to the backend → Spotter worksheet.
+  async function createSpotterWorksheet(file, userid, platform) {
+    const form = new FormData();
+    form.append('userid', userid);
+    form.append('platform', platform);
+    form.append('file', file);
+    const res = await fetch(BACKEND_URL + '/worksheet', {
+      method: 'POST',
+      headers: BACKEND_API_KEY ? { Authorization: 'Bearer ' + BACKEND_API_KEY } : {},
+      body: form,
+    });
+    if (!res.ok) throw new Error('Worksheet build failed: HTTP ' + res.status);
+    return res.json();
+  }
+
+  // Panel section: pick a workbook file → build a worksheet → open in Spotter.
+  function worksheetBuilderSection(context) {
+    const wrap = el('div', 'ts-spotter-wsbuilder');
+    wrap.append(el('h3', null, 'Build Spotter worksheet from workbook'));
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.twb,.twbx,.tds,.tdsx';
+    const status = el('div', 'ts-spotter-wsstatus');
+    const go = el('button', 'ts-spotter-more', 'Create worksheet');
+    go.type = 'button';
+    go.addEventListener('click', async () => {
+      const file = input.files && input.files[0];
+      if (!file) { status.textContent = 'Pick a .twb / .twbx file first.'; return; }
+      status.textContent = 'Uploading ' + file.name + '…';
+      try {
+        const userid = context.site || 'user';
+        const r = await createSpotterWorksheet(file, userid, 'tableau');
+        status.textContent = '';
+        status.append(el('div', null, 'Worksheet: ' + r.worksheet.name));
+        status.append(el('div', null, r.worksheet.columns.length + ' columns'));
+        if (r.searchUrl) {
+          const a = el('a', 'ts-spotter-open', 'Open in Spotter ↗');
+          a.href = r.searchUrl;
+          a.target = '_blank';
+          a.rel = 'noopener';
+          status.append(a);
+        } else {
+          status.append(el('div', null, 'Generated (configure TS on the backend to auto-import).'));
+        }
+      } catch (e) {
+        status.textContent = e.message;
+      }
+    });
+    wrap.append(input, go, status);
+    return wrap;
+  }
+
   function openPanel(context) {
     closePanel();
     const panel = document.createElement('aside');
@@ -337,7 +396,7 @@
     header.append(heading, close);
 
     const body = el('div', 'ts-spotter-body');
-    panel.append(header, buildRows(context), body);
+    panel.append(header, buildRows(context), body, worksheetBuilderSection(context));
     document.body.appendChild(panel);
     fillData(body, context);
 
