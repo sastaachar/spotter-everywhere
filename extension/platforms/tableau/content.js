@@ -575,13 +575,23 @@
     });
   }
 
-  // Identity of the viewed sheet — stable across reloads (Tableau regenerates
-  // only the title element id, not these fields). The backend refreshes the data
-  // in place on rebuild; Shift+click forces that path when a filter changed.
+  // A viz-unique, reload-stable model name. On a dashboard every viz resolves to
+  // the same VisualizationContainer (so context.worksheet is shared) and titles
+  // can repeat or be blank — zoneId is the one field that is distinct per viz AND
+  // stable across reloads (the title element id is regenerated), so it's what
+  // keeps each viz on its own worksheet + cache entry instead of sharing one.
+  function vizModelName(context) {
+    const base = context.sheetTitle || context.worksheet || 'data';
+    return context.zoneId ? `${base} (z${context.zoneId})` : base;
+  }
+
+  // Identity of the viewed viz — stable across reloads. Must include zoneId, or
+  // every viz on a dashboard collides onto one cached worksheet. Excludes the
+  // title element id, which Tableau regenerates each session.
   function datasetCacheKey(context) {
     return [
       'ds', PLATFORM, context.site, context.workbook,
-      context.dashboard || '', context.worksheet || '', context.sheetTitle || '',
+      context.dashboard || '', context.worksheet || '', context.zoneId || '', context.sheetTitle || '',
     ].join('|');
   }
 
@@ -712,7 +722,7 @@
       let worksheetName = null;
 
       if (context.worksheet) {
-        const name = context.sheetTitle || context.worksheet;
+        const name = vizModelName(context);
 
         // Verify what already exists before doing any work (the backend "cache").
         setStep('check', 'active');
