@@ -26,6 +26,7 @@
   const GET_LIVEBOARD = 'spotter:get-liveboard';
   const CACHE_GET = 'spotter:cache-get';
   const CACHE_SET = 'spotter:cache-set';
+  const DATASET_STREAM = 'spotter:dataset-stream';
   const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
   const PLATFORM = 'tableau';
   const LB_BUTTON_CLASS = 'ts-lb-btn';
@@ -560,6 +561,48 @@
     });
   }
 
+  // Streaming /dataset over a Port: onEvent(stageEvent) fires as each backend
+  // stage (load -> worksheet -> share) progresses, and the promise resolves with
+  // the final result body ({ embed, dataset, ... }, same shape as createDataset).
+  // Rejects on a transport failure or a pipeline error (status >= 400).
+  function createDatasetStream(payload, onEvent) {
+    return new Promise((resolve, reject) => {
+      let port;
+      try {
+        port = chrome.runtime.connect({ name: DATASET_STREAM });
+      } catch (e) {
+        return reject(new Error('Extension worker unavailable — reload this page.'));
+      }
+      let result = null;
+      let settled = false;
+      const finish = (fn, arg) => {
+        if (settled) return;
+        settled = true;
+        try { port.disconnect(); } catch (e) {}
+        fn(arg);
+      };
+      port.onMessage.addListener((msg) => {
+        if (!msg) return;
+        if (msg.error) return finish(reject, new Error(msg.error));
+        if (msg.stage === 'result') { result = msg; return; }
+        if (msg.done) {
+          if (result && (result.error || (typeof result.status === 'number' && result.status >= 400))) {
+            return finish(reject, new Error(result.detail || result.error || ('HTTP ' + result.status)));
+          }
+          return finish(resolve, result);
+        }
+        try { onEvent(msg); } catch (e) {}
+      });
+      port.onDisconnect.addListener(() => {
+        const err = chrome.runtime.lastError;
+        if (settled) return;
+        if (result) return finish(resolve, result);
+        finish(reject, new Error((err && err.message) || 'stream disconnected'));
+      });
+      try { port.postMessage({ payload }); } catch (e) { finish(reject, new Error('could not start the stream')); }
+    });
+  }
+
   // Ask the backend what already exists for this sheet (user / data model /
   // worksheet). Resolves null on any failure so the caller just builds instead.
   function checkDataset(payload) {
@@ -575,13 +618,23 @@
     });
   }
 
-  // Identity of the viewed sheet — stable across reloads (Tableau regenerates
-  // only the title element id, not these fields). The backend refreshes the data
-  // in place on rebuild; Shift+click forces that path when a filter changed.
+  // A viz-unique, reload-stable model name. On a dashboard every viz resolves to
+  // the same VisualizationContainer (so context.worksheet is shared) and titles
+  // can repeat or be blank — zoneId is the one field that is distinct per viz AND
+  // stable across reloads (the title element id is regenerated), so it's what
+  // keeps each viz on its own worksheet + cache entry instead of sharing one.
+  function vizModelName(context) {
+    const base = context.sheetTitle || context.worksheet || 'data';
+    return context.zoneId ? `${base} (z${context.zoneId})` : base;
+  }
+
+  // Identity of the viewed viz — stable across reloads. Must include zoneId, or
+  // every viz on a dashboard collides onto one cached worksheet. Excludes the
+  // title element id, which Tableau regenerates each session.
   function datasetCacheKey(context) {
     return [
       'ds', PLATFORM, context.site, context.workbook,
-      context.dashboard || '', context.worksheet || '', context.sheetTitle || '',
+      context.dashboard || '', context.worksheet || '', context.zoneId || '', context.sheetTitle || '',
     ].join('|');
   }
 
@@ -712,7 +765,7 @@
       let worksheetName = null;
 
       if (context.worksheet) {
-        const name = context.sheetTitle || context.worksheet;
+        const name = vizModelName(context);
 
         // Verify what already exists before doing any work (the backend "cache").
         setStep('check', 'active');
@@ -738,18 +791,32 @@
           const data = await requestWorksheetData(context.worksheet, 'underlying');
           setStep('data', 'done', data.rows.length.toLocaleString() + ' rows');
 
+          // Stream the backend pipeline so `load` and `worksheet` tick over as
+          // the cluster works; fall back to a single request if the stream can't
+          // start. onStage maps backend stages onto the checklist rows.
+          const payload = { userid, platform: PLATFORM, name, data: { columns: data.columns, rows: data.rows } };
+          const onStage = (ev) => {
+            if (ev.stage !== 'load' && ev.stage !== 'worksheet') return;
+            const st = ev.status === 'done' ? 'done' : ev.status === 'error' ? 'error' : 'active';
+            setStep(ev.stage, st, ev.detail || '');
+          };
           setStep('load', 'active');
-          setStep('worksheet', 'active');
-          const body = await createDataset({
-            userid, platform: PLATFORM, name,
-            data: { columns: data.columns, rows: data.rows },
-          });
+          let body;
+          try {
+            body = await createDatasetStream(payload, onStage);
+          } catch (streamErr) {
+            console.warn('[Tableau Spotter] dataset stream failed, falling back:', streamErr && streamErr.message);
+            setStep('worksheet', 'active');
+            body = await createDataset(payload);
+          }
           const tableId = body.dataset && body.dataset.tableId;
           worksheetId = (body.embed && body.embed.worksheetId)
             || (body.dataset && (body.dataset.worksheetId || body.dataset.tableId));
           worksheetName = body.dataset && (body.dataset.worksheetName || body.dataset.tableName);
-          setStep('load', tableId ? 'done' : 'error', tableId ? '' : 'not loaded');
-          setStep('worksheet', worksheetId ? 'done' : 'error', worksheetId ? '' : 'no model');
+          // Safety net for the terminal states (undefined detail keeps whatever
+          // the stream already reported, e.g. "12 columns").
+          setStep('load', tableId ? 'done' : 'error', tableId ? undefined : 'not loaded');
+          setStep('worksheet', worksheetId ? 'done' : 'error', worksheetId ? undefined : 'no model');
         }
 
         // Remember the outcome so the next open of this sheet resumes instantly.

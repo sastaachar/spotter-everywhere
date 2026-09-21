@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { logger } from 'hono/logger';
+import { stream } from 'hono/streaming';
 import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
@@ -70,6 +71,100 @@ const liveboardKey = (platform: string, guid: string): string =>
 function datasetNames(userid: string, platform: string, name: string) {
   const baseName = `${userid} ${platform} ${name || 'data'}`.replace(/\s+/g, ' ').trim().slice(0, 78);
   return { baseName, worksheetName: baseName, tableName: `${baseName} Table`.slice(0, 90) };
+}
+
+interface DatasetParams { userid: string; platform: string; name: string; csv: string; }
+// Progress events for the streaming /dataset path — the same stages the client
+// checklist shows: `load` (rows -> Falcon), `worksheet` (build/reuse), `share`.
+type ProgressEmit = (event: Record<string, unknown>) => void | Promise<void>;
+
+/**
+ * Run the dataset pipeline (load rows -> wrap in a worksheet -> share with the
+ * group), reporting each stage through `emit`. Both /dataset (JSON, no-op emit)
+ * and the streaming path use this, so they can never drift. Returns the response
+ * body + status the JSON route would send.
+ */
+async function buildDataset(
+  tsEnv: { host: string; token: string },
+  hostBase: string,
+  groups: string[],
+  { userid, platform, name, csv }: DatasetParams,
+  emit: ProgressEmit,
+): Promise<{ status: 201 | 502; body: Record<string, unknown> }> {
+  const { worksheetName, tableName } = datasetNames(userid, platform, name);
+
+  // 1. Load rows into Falcon (reloads the table in place if it already exists).
+  await emit({ stage: 'load', status: 'start', detail: tableName });
+  let dataset;
+  let tableId: string | undefined;
+  try {
+    dataset = await uploadCsvDataset(tsEnv, csv, tableName);
+    tableId = dataset.tableId ?? (await findMetadataId(tsEnv, tableName));
+  } catch (e) {
+    const detail = (e as Error).message;
+    await emit({ stage: 'load', status: 'error', detail });
+    return { status: 502, body: { error: 'data_load_failed', detail } };
+  }
+  await emit({ stage: 'load', status: 'done', tableId, detail: `${dataset.columns.length} columns` });
+
+  // 2. Wrap the loaded table in a worksheet (reuse the existing one by name).
+  let worksheetId: string | undefined;
+  let worksheetError: string | undefined;
+  if (dataset.loaded && dataset.columns.length && tableId) {
+    await emit({ stage: 'worksheet', status: 'start' });
+    try {
+      worksheetId = await findMetadataId(tsEnv, worksheetName, 'LOGICAL_TABLE');
+      if (!worksheetId) {
+        const imp = await importTml(tsEnv, [generateWorksheetOnTable(worksheetName, tableName, dataset.columns)]);
+        worksheetId = findGuid(imp, worksheetName) ?? (await findMetadataId(tsEnv, worksheetName, 'LOGICAL_TABLE'));
+        if (!worksheetId) worksheetError = `import returned no guid: ${JSON.stringify(imp).slice(0, 400)}`;
+      }
+      await emit({ stage: 'worksheet', status: worksheetId ? 'done' : 'error', worksheetId, detail: worksheetError });
+    } catch (e) {
+      worksheetError = (e as Error).message;
+      console.error('worksheet wrap failed:', worksheetError);
+      await emit({ stage: 'worksheet', status: 'error', detail: worksheetError });
+    }
+  }
+
+  // 3. Share table + worksheet with the privileged group so JIT members can search.
+  let shareError: string | undefined;
+  const ids = [worksheetId, tableId].filter((x): x is string => Boolean(x));
+  if (ids.length && groups.length) {
+    await emit({ stage: 'share', status: 'start' });
+    try {
+      await shareMetadata(tsEnv, ids, groups.map((g) => ({ identifier: g, type: 'USER_GROUP' as const })), 'READ_ONLY');
+      await emit({ stage: 'share', status: 'done' });
+    } catch (e) {
+      shareError = (e as Error).message;
+      console.error('share with group failed:', shareError);
+      await emit({ stage: 'share', status: 'error', detail: shareError });
+    }
+  }
+
+  const dataSources = worksheetId ? [worksheetId] : tableId ? [tableId] : [];
+  const searchUrl = tableId ? `${hostBase}/#/data/tables/${tableId}` : undefined;
+  return {
+    status: dataset.loaded ? 201 : 502,
+    body: {
+      userid,
+      platform,
+      dataset: {
+        tableId,
+        tableName,
+        worksheetId,
+        worksheetName: worksheetId ? worksheetName : undefined,
+        worksheetError,
+        shareError,
+        columns: dataset.columns,
+        loaded: dataset.loaded,
+        loadMessages: dataset.errors,
+      },
+      embed: { dataSources, worksheetId },
+      dataSources,
+      searchUrl,
+    },
+  };
 }
 
 export function createApp(options: AppOptions) {
@@ -735,78 +830,32 @@ export function createApp(options: AppOptions) {
       return c.json({ error: 'invalid_request', detail: 'no data: send data.{columns,rows}, csv, csvBase64, or a CSV file' }, 400);
     }
 
-    const { worksheetName, tableName } = datasetNames(userid, platform, name);
-
-    // Load the data. The USER isn't provisioned here — with JIT the user is
-    // created (with groups) when their embed token is minted (POST /embed-token).
-    // We just load + share with the group so any JIT member can search it.
-    let dataset;
-    let tableId: string | undefined;
-    try {
-      dataset = await uploadCsvDataset(tsEnv, csv, tableName);
-      tableId = dataset.tableId ?? (await findMetadataId(tsEnv, tableName));
-    } catch (e) {
-      return c.json({ error: 'data_load_failed', detail: (e as Error).message }, 502);
-    }
-
-    // Best-effort: wrap the loaded table in a worksheet so Spotter has a model.
-    let worksheetId: string | undefined;
-    let worksheetError: string | undefined;
-    if (dataset.loaded && dataset.columns.length && tableId) {
-      try {
-        // Reuse the worksheet when it already exists. Importing the TML again
-        // creates ANOTHER worksheet of the same name rather than replacing it,
-        // and the extension could then be pointed at any one of them. The table
-        // underneath was just reloaded in place, so the existing worksheet
-        // already serves the rows we just extracted.
-        worksheetId = await findMetadataId(tsEnv, worksheetName, 'LOGICAL_TABLE');
-        if (!worksheetId) {
-          const wsTml = generateWorksheetOnTable(worksheetName, tableName, dataset.columns);
-          const imp = await importTml(tsEnv, [wsTml]);
-          worksheetId = findGuid(imp, worksheetName) ?? (await findMetadataId(tsEnv, worksheetName, 'LOGICAL_TABLE'));
-          if (!worksheetId) worksheetError = `import returned no guid: ${JSON.stringify(imp).slice(0, 400)}`;
-        }
-      } catch (e) {
-        worksheetError = (e as Error).message;
-        console.error('worksheet wrap failed:', worksheetError);
-      }
-    }
-
-    // Share the worksheet + table with the privileged group so every JIT member
-    // can search it (tsadmin owns the imported objects). Best-effort.
-    let shareError: string | undefined;
+    const hostBase = options.tsHost!.replace(/\/$/, '');
     const groups = options.tsUserGroups ?? [];
-    const ids = [worksheetId, tableId].filter((x): x is string => Boolean(x));
-    if (ids.length && groups.length) {
-      try {
-        await shareMetadata(tsEnv, ids, groups.map((g) => ({ identifier: g, type: 'USER_GROUP' as const })), 'READ_ONLY');
-      } catch (e) {
-        shareError = (e as Error).message;
-        console.error('share with group failed:', shareError);
-      }
+    const params = { userid, platform, name, csv };
+
+    // Stream per-stage progress (load -> worksheet -> share) as NDJSON when the
+    // client asks (?stream=1 or an ndjson Accept header) so the checklist fills
+    // in live; otherwise return the single JSON result exactly as before. The
+    // final line is `{ stage: 'result', status, ...body }`.
+    const wantsStream = c.req.query('stream') === '1'
+      || (c.req.header('accept') ?? '').includes('application/x-ndjson');
+    if (wantsStream) {
+      c.header('Content-Type', 'application/x-ndjson; charset=utf-8');
+      c.header('Cache-Control', 'no-store');
+      c.header('X-Accel-Buffering', 'no'); // don't let a proxy buffer the stream
+      return stream(c, async (s) => {
+        try {
+          const result = await buildDataset(tsEnv, hostBase, groups, params, async (e) => { await s.write(JSON.stringify(e) + '\n'); });
+          await s.write(JSON.stringify({ stage: 'result', status: result.status, ...result.body }) + '\n');
+        } catch (e) {
+          await s.write(JSON.stringify({ stage: 'result', status: 500, error: 'internal_error', detail: (e as Error).message }) + '\n');
+        }
+      });
     }
 
-    const dataSources = worksheetId ? [worksheetId] : tableId ? [tableId] : [];
-    const searchUrl = tableId ? `${options.tsHost!.replace(/\/$/, '')}/#/data/tables/${tableId}` : undefined;
-
-    return c.json({
-      userid,
-      platform,
-      dataset: {
-        tableId,
-        tableName,
-        worksheetId,
-        worksheetName: worksheetId ? worksheetName : undefined,
-        worksheetError,
-        shareError,
-        columns: dataset.columns,
-        loaded: dataset.loaded,
-        loadMessages: dataset.errors,
-      },
-      embed: { dataSources, worksheetId },
-      dataSources,
-      searchUrl,
-    }, dataset.loaded ? 201 : 502);
+    const result = await buildDataset(tsEnv, hostBase, groups, params, () => {});
+    return c.json(result.body, result.status);
   });
 
   // Delete an uploaded dataset (Falcon table) by GUID — the "delete the
