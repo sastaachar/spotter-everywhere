@@ -6,7 +6,7 @@ import { rateLimit } from './rate-limit';
 import { SessionStore, ValidationError, parseSessionInput, summarize } from './session';
 import { extractTwbXml, parseTableauColumns } from './tableau';
 import { generateTml } from './tml';
-import { importTml, findGuid } from './thoughtspot';
+import { importTml, findGuid, ensureUser } from './thoughtspot';
 
 export interface AppOptions {
   apiKey: string;
@@ -16,7 +16,12 @@ export interface AppOptions {
   now?: () => number;
   /** Optional: when set, /worksheet also imports the worksheet into ThoughtSpot. */
   tsHost?: string;
+  /** The tsadmin token — server-only secret; never sent to or held by clients. */
   tsToken?: string;
+  /** Optional namespace prepended to provisioned usernames (e.g. "tableau_"). */
+  tsUserPrefix?: string;
+  /** Account type for provisioned users; default LOCAL_USER. */
+  tsAccountType?: string;
 }
 
 export const DEFAULT_MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -46,6 +51,30 @@ export function createApp(options: AppOptions) {
     const input = parseSessionInput(body);
     const session = store.create(input);
     return c.json(summarize(session), 201, { Location: `/session/${session.id}` });
+  });
+
+  // Idempotently provision a ThoughtSpot user for a platform identity, using
+  // the server-held tsadmin token. The client never sees a TS token. Body:
+  // JSON { userid, platform, email? }. Returns the (existing or created) user.
+  app.post('/provision', async (c) => {
+    if (!options.tsHost || !options.tsToken) {
+      return c.json({ error: 'not_configured', detail: 'TS_HOST and TS_TOKEN must be set to provision users' }, 503);
+    }
+    let body: Record<string, string>;
+    try {
+      body = (await c.req.json()) as Record<string, string>;
+    } catch {
+      return c.json({ error: 'invalid_json' }, 400);
+    }
+    const userid = (body.userid ?? '').trim();
+    const platform = (body.platform ?? '').trim();
+    if (!userid || !platform) return c.json({ error: 'invalid_request', detail: 'userid and platform are required' }, 400);
+
+    const user = await ensureUser(
+      { host: options.tsHost, token: options.tsToken },
+      { userid, platform, prefix: options.tsUserPrefix, accountType: options.tsAccountType, email: body.email },
+    );
+    return c.json({ userid, platform, user }, user.created ? 201 : 200);
   });
 
   // Turn an uploaded Tableau workbook into a Spotter-searchable worksheet.
@@ -91,10 +120,16 @@ export function createApp(options: AppOptions) {
     const name = `${userid} · ${platform} · ${(filename || 'workbook').replace(/\.(twbx?|tdsx?)$/i, '')}`.slice(0, 80);
     const tml = generateTml(name, columns);
 
+    let user;
     let worksheetId: string | undefined;
     let searchUrl: string | undefined;
     if (options.tsHost && options.tsToken) {
-      const result = await importTml({ host: options.tsHost, token: options.tsToken }, [tml.tableTml, tml.worksheetTml]);
+      const tsEnv = { host: options.tsHost, token: options.tsToken };
+      // Provision the user first, then import the worksheet (both as tsadmin).
+      user = await ensureUser(tsEnv, {
+        userid, platform, prefix: options.tsUserPrefix, accountType: options.tsAccountType,
+      });
+      const result = await importTml(tsEnv, [tml.tableTml, tml.worksheetTml]);
       worksheetId = findGuid(result, name);
       if (worksheetId) searchUrl = `${options.tsHost.replace(/\/$/, '')}/#/data/tables/${worksheetId}`;
     }
@@ -102,6 +137,7 @@ export function createApp(options: AppOptions) {
     return c.json({
       userid,
       platform,
+      user,
       worksheet: { name, columns },
       worksheetId,
       searchUrl,

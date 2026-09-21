@@ -1,5 +1,9 @@
 # For local `wrangler dev` (Cloudflare). Never commit real values.
 SPOTTER_API_KEY=dev-local-key
-# Optional: set to auto-import the worksheet into ThoughtSpot
+# Set these to enable user provisioning + worksheet import.
+# TS_TOKEN is the tsadmin token — it lives ONLY here, never in the extension.
 TS_HOST=
 TS_TOKEN=
+# Optional: namespace provisioned usernames, and pick the account type.
+TS_USER_PREFIX=
+TS_ACCOUNT_TYPE=LOCAL_USER

@@ -9,7 +9,13 @@ if (!apiKey) {
 }
 
 const port = Number(Bun.env.PORT ?? DEFAULT_PORT);
-const app = createApp({ apiKey });
+const app = createApp({
+  apiKey,
+  tsHost: Bun.env.TS_HOST,
+  tsToken: Bun.env.TS_TOKEN,
+  tsUserPrefix: Bun.env.TS_USER_PREFIX,
+  tsAccountType: Bun.env.TS_ACCOUNT_TYPE,
+});
 
 export default { port, fetch: app.fetch };
 

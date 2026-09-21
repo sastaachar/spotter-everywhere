@@ -68,6 +68,28 @@ one and `context` carries that platform's identifiers.
 
 Returns `201` with the session summary (no rows) and a `Location` header.
 
+### `POST /provision`
+
+Idempotently create (or find) a ThoughtSpot user for a platform identity, using
+the **server-held tsadmin token** — the extension never sees a TS token. Searches
+by name first and only creates when absent; a generated strong password is used
+so IAMv2 doesn't send an activation email, and it is never logged or returned.
+
+Requires `TS_HOST` + `TS_TOKEN`; returns `503 not_configured` otherwise.
+
+```jsonc
+// request
+{ "userid": "prashant", "platform": "tableau", "email": "…optional…" }
+
+// 201 (created) or 200 (already existed)
+{ "userid": "prashant", "platform": "tableau",
+  "user": { "id": "…guid…", "name": "prashant", "display_name": "prashant (tableau)", "created": true } }
+```
+
+The username is sanitized (lowercased, safe charset) and optionally namespaced by
+`TS_USER_PREFIX` (e.g. `tableau_`) to avoid clobbering real users. `/worksheet`
+provisions the same way before importing, and echoes the `user` in its response.
+
 ### `POST /worksheet`
 
 Turn a Tableau workbook into a Spotter-searchable worksheet. The extension
