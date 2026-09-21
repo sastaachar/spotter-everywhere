@@ -208,19 +208,40 @@ run this before loading the extension unpacked.
 
 ### Settings
 
-The options page now also takes the **ThoughtSpot model id** (`worksheetId` --
-the model Spotter answers from) and an optional **ThoughtSpot host** override;
-without a host it uses `ui/configs/thoughtspot-config.js`.
+The options page takes the ThoughtSpot **host**, **username**, **password**
+(development only) and an optional **model id**, plus the backend URL and API
+key -- the same fields as the Tableau extension. `src/dev-credentials.js`
+(gitignored, copied from the example) fills in when the options are empty.
 
 ### Auth
 
-`initSpotter` pins `TrustedAuthTokenCookieless`, and `panel.js` fetches the
-token from the backend's `/token` with the extension's API key, so no cluster
-secret sits in the extension.
+`initSpotter` pins `TrustedAuthTokenCookieless`. In development the embed mints
+the token itself from the username and password against the cluster's
+`/api/rest/2.0/auth/token/full`; production moves minting behind a backend.
 
-**That endpoint does not exist yet.** `GET /token` currently returns 404, so the
-panel mounts but Spotter cannot authenticate. `backend/.env.example` already
-carries `THOUGHTSPOT_HOST` and `THOUGHTSPOT_SECRET_KEY` for it.
+### Opening it
+
+Clicking the Spotter button opens the panel as a fixed frame. **Alt+click**
+opens the visual-details panel instead -- identifiers, field roles, the data
+table and the worksheet builder. Same split as the Tableau extension. The panel
+page posts `spotter:close` back to the content script to dismiss itself, and
+receives the visual's context as JSON in the URL hash.
+
+## Building a Spotter worksheet from a visual
+
+Tableau uploads a `.twb`/`.twbx` to `POST /worksheet`. Power BI has no such
+file, so the equivalent is the visual's own rows: the details panel's **Create
+Spotter worksheet** posts them to `POST /dataset`, which loads them into
+ThoughtSpot and wraps them in a worksheet. The returned `embed.worksheetId` is
+then handed to the panel, so Spotter answers against that visual's data.
+
+This sidesteps the mapping problem -- no need to decide in advance which
+ThoughtSpot model a Power BI visual corresponds to.
+
+**Rows are sent unformatted.** `/dataset` turns them into CSV, so sending the
+display strings (`$1,220,718.00`, `124%`) would load every measure as text and
+Spotter could not aggregate. `bridge.js` returns `rawRows` alongside the
+formatted `rows` for exactly this.
 
 ## Getting a visual's data
 
