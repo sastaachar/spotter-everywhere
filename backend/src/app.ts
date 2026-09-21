@@ -313,7 +313,12 @@ export function createApp(options: AppOptions) {
       return c.json({ error: 'not_configured', detail: 'TS_HOST and TS_TOKEN must be set to look up liveboards' }, 503);
     }
     const name = liveboardKey(platform, guid);
-    const id = await findMetadataId({ host: options.tsHost, token: options.tsToken }, name, 'LIVEBOARD');
+    let id;
+    try {
+      id = await findMetadataId({ host: options.tsHost, token: options.tsToken }, name, 'LIVEBOARD');
+    } catch (e) {
+      return c.json({ error: 'cluster_error', detail: (e as Error).message }, 502);
+    }
     return c.json({
       platform, guid, name, exists: Boolean(id),
       liveboardId: id,
@@ -381,7 +386,13 @@ export function createApp(options: AppOptions) {
 
     // 1. lookup — reuse an existing liveboard by name.
     if (tsEnv) {
-      const existing = await findMetadataId(tsEnv, name, 'LIVEBOARD');
+      let existing;
+      try {
+        existing = await findMetadataId(tsEnv, name, 'LIVEBOARD');
+      } catch (e) {
+        stage('lookup', 'failed', (e as Error).message);
+        return c.json({ platform, name, reused: false, error: 'cluster_error', stages }, 502);
+      }
       if (existing) {
         stage('lookup', 'ok', 'found existing');
         for (const s of ['parse', 'generate', 'import', 'locate']) stage(s, 'skipped');
