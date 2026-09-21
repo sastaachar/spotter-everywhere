@@ -1,20 +1,26 @@
+/** @type {import('../spotter-embed/index.js').PlatformConfig} */
 export const powerBiConfig = {
   platform: 'powerbi',
   label: 'Power BI',
-  accent: '#2770ef',
-  subject: (c) => c.visualTitle || c.visualId,
-  contextRows: [
-    ['Report', 'reportTitle'],
-    ['Report id', 'reportId'],
-    ['Page', 'pageName'],
-    ['Visual title', 'visualTitle'],
-    ['Visual id', (c) => c.visualId || (c.layoutError ? 'layout error: ' + c.layoutError : null)],
-    ['Visual type', 'visualType'],
-    ['Filters', 'filterCount'],
-    ['Tab order', 'tabOrder'],
-    ['Position', 'position'],
-    ['Workspace', 'workspace'],
-  ],
-  dataKinds: ['summary'],
-  underlyingCap: 10000,
+  colors: {
+    primary: '#f2c811',
+    primaryHover: '#e0b600',
+    primaryActive: '#c9a300',
+    secondary: '#ffffff',
+    secondaryHover: '#f3f2f1',
+    background: '#ffffff',
+    surface: '#f3f2f1',
+    text: '#252423',
+    textSecondary: '#605e5c',
+    font: '"Segoe UI", "Segoe UI Web (West European)", -apple-system, BlinkMacSystemFont, Roboto, sans-serif',
+  },
+  cssVariables: {
+    '--ts-var-button-border-radius': '2px',
+    '--ts-var-button--primary-color': '#252423',
+  },
+  viewConfig: {
+    hideSourceSelection: true,
+    hideSampleQuestions: false,
+    showSpotterLimitations: false,
+  },
 };

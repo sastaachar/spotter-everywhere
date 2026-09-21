@@ -1,18 +1,25 @@
+/** @type {import('../spotter-embed/index.js').PlatformConfig} */
 export const tableauConfig = {
   platform: 'tableau',
   label: 'Tableau',
-  accent: '#2770ef',
-  subject: (c) => c.worksheet,
-  contextRows: [
-    ['Dashboard', (c) => (c.isDashboard ? c.dashboard : c.dashboard ? c.dashboard + ' (sheet view)' : null)],
-    ['Workbook', 'workbook'],
-    ['Worksheet', 'worksheet'],
-    ['Sheet title', 'sheetTitle'],
-    ['Zone id', 'zoneId'],
-    ['Site', 'site'],
-    ['VizQL session', 'sessionId'],
-    ['Title element', 'titleElementId'],
-  ],
-  dataKinds: ['summary', 'underlying'],
-  underlyingCap: 10000,
+  colors: {
+    primary: '#1f77b4',
+    primaryHover: '#16609a',
+    primaryActive: '#124f80',
+    secondary: '#ffffff',
+    secondaryHover: '#eef4fb',
+    background: '#ffffff',
+    surface: '#f5f5f5',
+    text: '#333333',
+    textSecondary: '#666666',
+    font: '"Tableau Book", Tableau, Arial, sans-serif',
+  },
+  cssVariables: {
+    '--ts-var-button-border-radius': '4px',
+  },
+  viewConfig: {
+    hideSourceSelection: true,
+    hideSampleQuestions: false,
+    showSpotterLimitations: false,
+  },
 };

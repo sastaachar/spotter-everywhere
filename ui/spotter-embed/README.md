@@ -1,45 +1,46 @@
 # ui/spotter-embed
 
-The shared extension UI: the Spotter panel every extension opens on top of the
-host BI tool. Plain ES modules, no framework, no build step. Renders into a
-shadow root so host CSS and panel CSS never touch.
+ThoughtSpot's `SpotterEmbed` from `@thoughtspot/visual-embed-sdk`, themed per
+host platform. `TableauSpotterEmbed` is the SDK class with the Tableau config
+applied, `PowerBiSpotterEmbed` the same with the Power BI config. Nothing else
+changes: constructor, `render()`, events and view config are the SDK's.
 
 ```js
-import { TableauSpotterEmbed } from '../../ui/spotter-embed/index.js';
+import { initSpotter, TableauSpotterEmbed } from '@spotter-everywhere/spotter-embed';
 
-const embed = new TableauSpotterEmbed({
-  loadData: (kind, context) => requestWorksheetData(context.worksheet, kind), // 'summary' | 'underlying'
-  sendSession: (payload) => postToBackend(payload),                            // -> { id, url? }
+initSpotter({
+  thoughtSpotHost: 'https://your-cluster.thoughtspot.cloud',
+  getAuthToken: () => fetch(backend + '/token', { headers }).then((r) => r.text()),
 });
-embed.open(context);   // context: the identifiers the extension collected
-embed.close();
+
+const embed = new TableauSpotterEmbed('#spotter', { worksheetId: '<thoughtspot model id>' });
+await embed.render();
 ```
 
-`TableauSpotterEmbed` and `PowerBiSpotterEmbed` are `SpotterEmbed` with the
-matching config from `../configs` applied. Use `new SpotterEmbed(config, hooks)`
-directly for a new platform.
+`initSpotter` is the SDK's `init` with `authType` fixed to
+`TrustedAuthTokenCookieless`; the token is minted by our backend, never by the
+browser. Extra view config passed to a preset wins over the platform defaults,
+and any `customizations` you pass are merged on top of the theme.
 
-## Config (`../configs/*-config.js`)
+## Configs (`../configs/*-config.js`)
+
+Each config is platform level only: colours, CSS variables and default view
+config. No selectors, no data logic.
 
 | Key | Purpose |
 | --- | --- |
-| `platform` | id sent to the backend, e.g. `tableau` |
-| `label` | shown in the panel header |
-| `accent` | button and border colour |
-| `subject(context)` | what the data is about, used in loading text |
-| `contextRows` | `[label, key or fn(context)]` pairs shown at the top |
-| `dataKinds` | `['summary']` or `['summary', 'underlying']` |
-| `underlyingCap` | row cap the host API imposes, flagged in the note |
+| `platform`, `label` | id sent to the backend and shown in UI |
+| `colors` | primary/hover/active, secondary, background, surface, text, font. Mapped to `--ts-var-*` by `cssVariablesFor` |
+| `cssVariables` | raw `--ts-var-*` overrides that win over the mapped colours |
+| `viewConfig` | `SpotterEmbedViewConfig` defaults for that platform |
 
-## Hooks
+## Develop
 
-| Hook | Called | Returns |
-| --- | --- | --- |
-| `loadData(kind, context)` | on open (`summary`) and on the underlying button | `{ columns:[{name,type}], rows, totalRows?, filters?, parameters?, selectedMarks? }` |
-| `sendSession(payload)` | on the send button | `{ id, url? }` or throws |
-| `buildPayload(context, summary, underlying)` | optional override of the default backend payload | `{ platform, context, data }` |
-| `mount` | optional element to append the host to, default `document.body` | |
+```
+bun install
+bun test
+```
 
-Loading it from a content script: MV3 content scripts are classic scripts, so
-either bundle this folder into the extension or expose it via
-`web_accessible_resources` and `import(chrome.runtime.getURL(...))`.
+The extension panel page is where this gets mounted. MV3 forbids remote
+scripts, so the SDK is bundled into the extension; the extension page's own
+CSP allows framing the ThoughtSpot host.
