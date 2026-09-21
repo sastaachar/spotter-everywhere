@@ -74,13 +74,40 @@ export function viewConfigFor(config, viewConfig = {}) {
   return { ...config.viewConfig, ...viewConfig, customizations: customizationsFor(config, viewConfig.customizations) };
 }
 
+const TOKEN_PATH = '/api/rest/2.0/auth/token/full';
+const TOKEN_VALIDITY_SECONDS = 300;
+
 /**
- * init() pinned to cookieless trusted auth; the token comes from our backend.
- * thoughtSpotHost defaults to the configured cluster.
- * @param {Omit<import('@thoughtspot/visual-embed-sdk').EmbedConfig, 'authType' | 'thoughtSpotHost'> & { thoughtSpotHost?: string, getAuthToken: () => Promise<string> }} config
+ * Dev-only: exchange a username and password for a cookieless token straight
+ * from the browser. Production must move this behind a backend.
+ * @param {{ host?: string, username: string, password: string, fetchImpl?: typeof fetch }} creds
+ * @returns {Promise<string>}
  */
-export function initSpotter(config) {
-  return init({ thoughtSpotHost: thoughtSpotConfig.host, ...config, authType: AuthType.TrustedAuthTokenCookieless });
+export async function mintToken({ host = thoughtSpotConfig.host, username, password, fetchImpl = fetch }) {
+  const url = new URL(TOKEN_PATH, host);
+  if (url.protocol !== 'https:') throw new Error('ThoughtSpot host must be https');
+  const res = await fetchImpl(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ username, password, validity_time_in_sec: TOKEN_VALIDITY_SECONDS }),
+  });
+  if (!res.ok) throw new Error('ThoughtSpot token request failed with status ' + res.status);
+  const body = await res.json();
+  if (!body || typeof body.token !== 'string') throw new Error('ThoughtSpot token response had no token');
+  return body.token;
+}
+
+/**
+ * init() pinned to cookieless trusted auth. Pass getAuthToken, or for dev pass
+ * username and password and the token is minted from the browser.
+ * thoughtSpotHost defaults to the configured cluster.
+ * @param {Omit<import('@thoughtspot/visual-embed-sdk').EmbedConfig, 'authType' | 'thoughtSpotHost' | 'getAuthToken'> & { thoughtSpotHost?: string, getAuthToken?: () => Promise<string>, username?: string, password?: string }} config
+ */
+export function initSpotter({ username, password, ...config }) {
+  const thoughtSpotHost = config.thoughtSpotHost || thoughtSpotConfig.host;
+  const getAuthToken = config.getAuthToken || (username && password ? () => mintToken({ host: thoughtSpotHost, username, password }) : undefined);
+  if (!getAuthToken) throw new Error('initSpotter needs getAuthToken, or username and password');
+  return init({ ...config, thoughtSpotHost, getAuthToken, authType: AuthType.TrustedAuthTokenCookieless });
 }
 
 export class PlatformSpotterEmbed extends SpotterEmbed {

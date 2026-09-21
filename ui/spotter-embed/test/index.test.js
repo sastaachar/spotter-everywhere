@@ -20,6 +20,38 @@ describe('cluster', () => {
   });
 });
 
+describe('mintToken', () => {
+  const calls = [];
+  const fakeFetch = (status, body) => async (url, init) => {
+    calls.push({ url: String(url), init });
+    return new Response(JSON.stringify(body), { status });
+  };
+
+  test('posts username and password to the cluster and returns the token', async () => {
+    calls.length = 0;
+    const token = await mod.mintToken({ host: 'https://ts.example', username: 'u', password: 'p', fetchImpl: fakeFetch(200, { token: 'tok' }) });
+    expect(token).toBe('tok');
+    expect(calls[0].url).toBe('https://ts.example/api/rest/2.0/auth/token/full');
+    expect(JSON.parse(calls[0].init.body)).toEqual({ username: 'u', password: 'p', validity_time_in_sec: 300 });
+  });
+
+  test('defaults to the configured host', async () => {
+    calls.length = 0;
+    await mod.mintToken({ username: 'u', password: 'p', fetchImpl: fakeFetch(200, { token: 'tok' }) });
+    expect(calls[0].url.startsWith(mod.thoughtSpotConfig.host)).toBe(true);
+  });
+
+  test('rejects failures, missing tokens and non-https hosts', async () => {
+    await expect(mod.mintToken({ username: 'u', password: 'p', fetchImpl: fakeFetch(401, {}) })).rejects.toThrow('401');
+    await expect(mod.mintToken({ username: 'u', password: 'p', fetchImpl: fakeFetch(200, {}) })).rejects.toThrow('no token');
+    await expect(mod.mintToken({ host: 'http://ts.example', username: 'u', password: 'p', fetchImpl: fakeFetch(200, { token: 't' }) })).rejects.toThrow('https');
+  });
+
+  test('initSpotter refuses to run with neither getAuthToken nor credentials', () => {
+    expect(() => mod.initSpotter({})).toThrow('getAuthToken');
+  });
+});
+
 describe('theme', () => {
   test('colors map onto ThoughtSpot CSS variables', () => {
     const vars = cssVariablesFor(tableauConfig);

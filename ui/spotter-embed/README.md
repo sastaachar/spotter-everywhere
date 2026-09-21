@@ -8,19 +8,25 @@ changes: constructor, `render()`, events and view config are the SDK's.
 ```js
 import { initSpotter, TableauSpotterEmbed } from '@spotter-everywhere/spotter-embed';
 
-initSpotter({
-  // thoughtSpotHost defaults to ../configs/thoughtspot-config.js; pass one to override
-  getAuthToken: () => fetch(backend + '/token', { headers }).then((r) => r.text()),
-});
+// Dev: the embed mints the token itself from a username and password.
+// thoughtSpotHost defaults to ../configs/thoughtspot-config.js; pass one to override.
+initSpotter({ username, password });
+
+// Later: hand token minting to a backend instead.
+// initSpotter({ getAuthToken: () => fetch(backend + '/token').then((r) => r.text()) });
 
 const embed = new TableauSpotterEmbed('#spotter', { worksheetId: '<thoughtspot model id>' });
 await embed.render();
 ```
 
 `initSpotter` is the SDK's `init` with `authType` fixed to
-`TrustedAuthTokenCookieless`; the token is minted by our backend, never by the
-browser. Extra view config passed to a preset wins over the platform defaults,
-and any `customizations` you pass are merged on top of the theme.
+`TrustedAuthTokenCookieless`. Given `username` and `password` it builds
+`getAuthToken` from `mintToken`, which posts to the cluster's
+`/api/rest/2.0/auth/token/full` for a five-minute token. That is a development
+shortcut: the credentials live wherever the caller keeps them (extension
+storage, a local config), never in this repo, and production moves minting
+behind a backend. Extra view config passed to a preset wins over the platform
+defaults, and any `customizations` you pass are merged on top of the theme.
 
 ## Configs (`../configs/*-config.js`)
 
