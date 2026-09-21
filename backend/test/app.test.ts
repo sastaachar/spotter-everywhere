@@ -416,3 +416,37 @@ describe('POST /get-liveboard', () => {
     expect(body.liveboardId).toBeUndefined();
   });
 });
+
+describe('admin token from the trusted-auth secret key (no static TS_TOKEN)', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  test('mints an admin token as tsadmin via secret_key, then does admin calls with it', async () => {
+    const calls: { url: string; body: unknown }[] = [];
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      calls.push({ url: String(url), body });
+      if (String(url).includes('/auth/token/full')) return new Response(JSON.stringify({ token: 'ADMIN-TOK' }), { status: 200 });
+      if (String(url).includes('/metadata/search')) return new Response(JSON.stringify([]), { status: 200 });
+      return new Response('{}', { status: 200 });
+    }) as typeof fetch;
+
+    const app = createApp({ apiKey: KEY, tsHost: 'https://ts.example', tsSecretKey: 'SEKRIT' });
+    const res = await app.request('/get-liveboard', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ platform: 'tableau', guid: 'g1' }) });
+    expect(res.status).toBe(200);
+    const mint = calls.find((c) => c.url.includes('/auth/token/full'));
+    expect(mint).toBeTruthy();
+    expect((mint!.body as { username: string }).username).toBe('tsadmin');
+    expect((mint!.body as { secret_key: string }).secret_key).toBe('SEKRIT');
+  });
+
+  test('lookup endpoints are available with only a secret key (no tsToken)', async () => {
+    globalThis.fetch = (async (url: string) => {
+      if (String(url).includes('/auth/token/full')) return new Response(JSON.stringify({ token: 'T' }), { status: 200 });
+      return new Response(JSON.stringify([]), { status: 200 });
+    }) as typeof fetch;
+    const app = createApp({ apiKey: KEY, tsHost: 'https://ts.example', tsSecretKey: 'S' });
+    const res = await app.request('/get-liveboard', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ platform: 'tableau', guid: 'g' }) });
+    expect(res.status).not.toBe(503);
+  });
+});

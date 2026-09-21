@@ -1,7 +1,9 @@
 # For local `wrangler dev` (Cloudflare). Never commit real values.
 SPOTTER_API_KEY=dev-local-key
 # Set these to enable user provisioning + worksheet import.
-# TS_TOKEN is the tsadmin token — it lives ONLY here, never in the extension.
+# TS_TOKEN is a static tsadmin token (expires). OPTIONAL: if TS_SECRET_KEY is
+# set, the admin token is minted from it as TS_ADMIN_USER (default tsadmin) and
+# auto-refreshed, so you don't need TS_TOKEN at all.
 TS_HOST=
 TS_TOKEN=
 # Optional: namespace provisioned usernames, and pick the account type.

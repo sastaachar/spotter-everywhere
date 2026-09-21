@@ -28,8 +28,11 @@ export interface AppOptions {
   tsAccountType?: string;
   /** Domain for synthesized provisioned-user emails (default spotter.local). */
   tsEmailDomain?: string;
-  /** Trusted-auth secret key — mints embed tokens AS the provisioned user. */
+  /** Trusted-auth secret key — mints embed tokens AS the provisioned user, and
+   *  (when tsToken is unset) the admin token too, so no static token is needed. */
   tsSecretKey?: string;
+  /** Admin user the secret key mints the admin token as. Default "tsadmin". */
+  tsAdminUser?: string;
   /** Groups (GUIDs/names) provisioned users join — carry the Spotter/search
    *  privileges. Without a privileged group, the user gets "no permission". */
   tsUserGroups?: string[];
@@ -64,6 +67,24 @@ export function createApp(options: AppOptions) {
   const store = options.store ?? new SessionStore();
   const app = new Hono();
 
+  // Admin REST calls need an admin bearer. Prefer a static tsToken if given,
+  // else mint one AS the admin user from the trusted-auth secret key and cache
+  // it until just before expiry — so no static, expiring token is required.
+  const adminUser = options.tsAdminUser ?? 'tsadmin';
+  const canAdmin = () => Boolean(options.tsHost && (options.tsToken || options.tsSecretKey));
+  let adminCache = { token: '', exp: 0 };
+  async function adminEnv() {
+    if (!options.tsHost) return null;
+    if (options.tsToken) return { host: options.tsHost, token: options.tsToken };
+    if (!options.tsSecretKey) return null;
+    if (!adminCache.token || Date.now() >= adminCache.exp) {
+      const validitySec = 3600;
+      const token = await mintUserToken(options.tsHost, adminUser, options.tsSecretKey, { validitySec });
+      adminCache = { token, exp: Date.now() + (validitySec - 120) * 1000 };
+    }
+    return { host: options.tsHost, token: adminCache.token };
+  }
+
   app.use(secureHeaders());
   // CORS before auth/rate-limit so the browser's preflight (OPTIONS, no auth
   // header) is answered directly instead of 401/429'd.
@@ -96,7 +117,7 @@ export function createApp(options: AppOptions) {
   // the server-held tsadmin token. The client never sees a TS token. Body:
   // JSON { userid, platform, email? }. Returns the (existing or created) user.
   app.post('/provision', async (c) => {
-    if (!options.tsHost || !options.tsToken) {
+    if (!canAdmin()) {
       return c.json({ error: 'not_configured', detail: 'TS_HOST and TS_TOKEN must be set to provision users' }, 503);
     }
     let body: Record<string, string>;
@@ -109,8 +130,9 @@ export function createApp(options: AppOptions) {
     const platform = (body.platform ?? '').trim();
     if (!userid || !platform) return c.json({ error: 'invalid_request', detail: 'userid and platform are required' }, 400);
 
+    const env = (await adminEnv())!;
     const user = await ensureUser(
-      { host: options.tsHost, token: options.tsToken },
+      env,
       {
         userid, platform, prefix: options.tsUserPrefix, accountType: options.tsAccountType,
         emailDomain: options.tsEmailDomain, email: body.email, groups: options.tsUserGroups,
@@ -150,9 +172,10 @@ export function createApp(options: AppOptions) {
       });
       // auto_create only assigns groups to NEW users; ensure membership for
       // existing users too (idempotent ADD) so they keep the Spotter privilege.
-      if (options.tsToken && options.tsUserGroups?.length) {
+      if (options.tsUserGroups?.length) {
         try {
-          await addUserToGroups({ host: options.tsHost, token: options.tsToken }, username, options.tsUserGroups);
+          const env = await adminEnv();
+          if (env) await addUserToGroups(env, username, options.tsUserGroups);
         } catch (e) {
           console.error(`ensure groups for ${username} failed:`, (e as Error).message);
         }
@@ -238,7 +261,7 @@ export function createApp(options: AppOptions) {
 
     const name = (provided || filename.replace(/\.(twbx?|tdsx?)$/i, '') || '').slice(0, 80);
     const wantText = c.req.query('format') === 'text';
-    const tsEnv = options.tsHost && options.tsToken ? { host: options.tsHost, token: options.tsToken } : null;
+    const tsEnv = await adminEnv();
     const pinboardUrl = (id: string) => `${options.tsHost!.replace(/\/$/, '')}/#/pinboard/${id}`;
 
     if (!name && !bytes) {
@@ -309,20 +332,20 @@ export function createApp(options: AppOptions) {
     if (!platform || !guid) {
       return c.json({ error: 'invalid_request', detail: 'platform and guid are required' }, 400);
     }
-    if (!options.tsHost || !options.tsToken) {
+    if (!canAdmin()) {
       return c.json({ error: 'not_configured', detail: 'TS_HOST and TS_TOKEN must be set to look up liveboards' }, 503);
     }
     const name = liveboardKey(platform, guid);
     let id;
     try {
-      id = await findMetadataId({ host: options.tsHost, token: options.tsToken }, name, 'LIVEBOARD');
+      id = await findMetadataId((await adminEnv())!, name, 'LIVEBOARD');
     } catch (e) {
       return c.json({ error: 'cluster_error', detail: (e as Error).message }, 502);
     }
     return c.json({
       platform, guid, name, exists: Boolean(id),
       liveboardId: id,
-      liveboardUrl: id ? `${options.tsHost.replace(/\/$/, '')}/#/pinboard/${id}` : undefined,
+      liveboardUrl: id ? `${options.tsHost!.replace(/\/$/, '')}/#/pinboard/${id}` : undefined,
     }, 200);
   });
 
@@ -377,7 +400,7 @@ export function createApp(options: AppOptions) {
     }
     if (!name) return c.json({ error: 'invalid_request', detail: 'name is required (used as the reuse key)' }, 400);
 
-    const tsEnv = options.tsHost && options.tsToken ? { host: options.tsHost, token: options.tsToken } : null;
+    const tsEnv = await adminEnv();
     const pinboardUrl = (id: string) => `${options.tsHost!.replace(/\/$/, '')}/#/pinboard/${id}`;
     const stages: { stage: string; status: 'ok' | 'skipped' | 'failed'; detail?: string }[] = [];
     const stage = (s: string, status: 'ok' | 'skipped' | 'failed', detail?: string) => {
@@ -494,8 +517,8 @@ export function createApp(options: AppOptions) {
     let user;
     let worksheetId: string | undefined;
     let searchUrl: string | undefined;
-    if (options.tsHost && options.tsToken) {
-      const tsEnv = { host: options.tsHost, token: options.tsToken };
+    if (canAdmin()) {
+      const tsEnv = (await adminEnv())!;
       // Provision the user first, then import the worksheet (both as tsadmin).
       user = await ensureUser(tsEnv, {
         userid, platform, prefix: options.tsUserPrefix, accountType: options.tsAccountType,
@@ -503,7 +526,7 @@ export function createApp(options: AppOptions) {
       });
       const result = await importTml(tsEnv, [tml.tableTml, tml.worksheetTml]);
       worksheetId = findGuid(result, name);
-      if (worksheetId) searchUrl = `${options.tsHost.replace(/\/$/, '')}/#/data/tables/${worksheetId}`;
+      if (worksheetId) searchUrl = `${options.tsHost!.replace(/\/$/, '')}/#/data/tables/${worksheetId}`;
     }
 
     return c.json({
@@ -523,10 +546,10 @@ export function createApp(options: AppOptions) {
   // one of: data:{columns,rows} | csv | csvBase64 } — or multipart with a CSV
   // `file`. Returns the table + worksheet ids and ready-to-use embed sources.
   app.post('/dataset', bodyLimit({ maxSize: options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES }), async (c) => {
-    if (!options.tsHost || !options.tsToken) {
+    if (!canAdmin()) {
       return c.json({ error: 'not_configured', detail: 'TS_HOST and TS_TOKEN must be set to load data' }, 503);
     }
-    const tsEnv = { host: options.tsHost, token: options.tsToken };
+    const tsEnv = (await adminEnv())!;
     const ct = c.req.header('content-type') ?? '';
     let userid = '';
     let platform = '';
@@ -619,7 +642,7 @@ export function createApp(options: AppOptions) {
     }
 
     const dataSources = worksheetId ? [worksheetId] : tableId ? [tableId] : [];
-    const searchUrl = tableId ? `${options.tsHost.replace(/\/$/, '')}/#/data/tables/${tableId}` : undefined;
+    const searchUrl = tableId ? `${options.tsHost!.replace(/\/$/, '')}/#/data/tables/${tableId}` : undefined;
 
     return c.json({
       userid,
@@ -644,12 +667,12 @@ export function createApp(options: AppOptions) {
   // Delete an uploaded dataset (Falcon table) by GUID — the "delete the
   // spreadsheet" action. The worksheet on top, if any, is removed with it.
   app.delete('/dataset/:tableId', async (c) => {
-    if (!options.tsHost || !options.tsToken) {
+    if (!canAdmin()) {
       return c.json({ error: 'not_configured', detail: 'TS_HOST and TS_TOKEN must be set' }, 503);
     }
     const tableId = c.req.param('tableId');
     if (!/^[0-9a-f-]{16,}$/i.test(tableId)) return c.json({ error: 'invalid_request', detail: 'bad tableId' }, 400);
-    await deleteTable({ host: options.tsHost, token: options.tsToken }, tableId);
+    await deleteTable((await adminEnv())!, tableId);
     return c.body(null, 204);
   });
 

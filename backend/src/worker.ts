@@ -10,6 +10,7 @@ interface WorkerEnv {
   TS_ACCOUNT_TYPE?: string;
   TS_EMAIL_DOMAIN?: string;
   TS_SECRET_KEY?: string;
+  TS_ADMIN_USER?: string;
   TS_USER_GROUPS?: string;
   ALLOWED_ORIGINS?: string;
 }
@@ -31,6 +32,7 @@ export default {
       tsAccountType: env.TS_ACCOUNT_TYPE,
       tsEmailDomain: env.TS_EMAIL_DOMAIN,
       tsSecretKey: env.TS_SECRET_KEY,
+      tsAdminUser: env.TS_ADMIN_USER,
       tsUserGroups: env.TS_USER_GROUPS?.split(',').map((s) => s.trim()).filter(Boolean),
       allowedOrigins: env.ALLOWED_ORIGINS?.split(',').map((s) => s.trim()).filter(Boolean),
     });
