@@ -172,6 +172,56 @@ the closest thing to a stable per-visual identifier.
 
 Wire the real Spotter experience into `openPanel()`, or listen for the event.
 
+## The Spotter panel
+
+The panel's **Spotter** tab is `ui/spotter-embed`'s `PowerBiSpotterEmbed` -- the
+Visual Embed SDK's `SpotterEmbed` with the Power BI theme from
+`ui/configs/power-bi-config.js`. The **Data** tab keeps the query result table.
+
+### Why it is an extension page, not injected DOM
+
+`panel.html` is loaded in an iframe from `chrome-extension://`, not rendered
+into the Power BI document, for two reasons:
+
+- MV3 forbids remote scripts, so the SDK cannot be fetched from a CDN.
+- Power BI's own CSP would block framing the ThoughtSpot host from its document.
+  An extension page has its own CSP and can frame it.
+
+`panel.html` is therefore listed in `web_accessible_resources`, scoped to
+`app.powerbi.com`.
+
+### Build step
+
+The SDK has to ship inside the extension. There is no bundler, so
+`tools/build-panel.mjs` copies the SDK's prebuilt ESM bundle and the shared
+`ui/` sources into `vendor/`, rewriting the bare `@thoughtspot/visual-embed-sdk`
+import to the vendored file:
+
+```bash
+node tools/build-panel.mjs      # re-run after changing ui/spotter-embed or ui/configs
+```
+
+It takes the SDK from `ui/spotter-embed/node_modules` when present, otherwise a
+`visual-embed-sdk` checkout beside the repo, and warns if the version does not
+match the pin in `ui/spotter-embed/package.json`. `vendor/` is gitignored, so
+run this before loading the extension unpacked.
+
+### Settings
+
+The options page now also takes the **ThoughtSpot model id** (`worksheetId` --
+the model Spotter answers from) and an optional **ThoughtSpot host** override;
+without a host it uses `ui/configs/thoughtspot-config.js`.
+
+### Auth
+
+`initSpotter` pins `TrustedAuthTokenCookieless`, and `panel.js` fetches the
+token from the backend's `/token` with the extension's API key, so no cluster
+secret sits in the extension.
+
+**That endpoint does not exist yet.** `GET /token` currently returns 404, so the
+panel mounts but Spotter cannot authenticate. `backend/.env.example` already
+carries `THOUGHTSPOT_HOST` and `THOUGHTSPOT_SECRET_KEY` for it.
+
 ## Getting a visual's data
 
 Clicking Spotter loads the visual's actual rows into the panel, matching what is
