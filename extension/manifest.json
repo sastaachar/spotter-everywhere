@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "Spotter Everywhere",
+  "version": "0.1.0",
+  "description": "Adds a ThoughtSpot Spotter button to Tableau and Power BI, picking the right code for the site it loads on.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAo3trsEUGAzF0usmbjY9j/WLk7OupRuCEsvUQLmBHWPE397hIQJmtelHinCGe7ZfN4TNx8orHTd+sWtrhIR+B4H5WbLzHlGqdW9Dt+h27Zvdi+ouY6W4HP5LQyCfvIlmpQdU0zVfMSnyGiciGvKFG4vFAmjEkbIQAh/wm5nL6uWO275zIK3YNXvjsjMja8qXNvkW5ZeFEEPpKU6tntWCPr9stAGFRqDxMG7nmodNLfPHFLsJPB8GjkicyEYlqqrTxvalzF4RZqbjWCp1gLdNEJqaHB8DO2CKBkWUWVKFvINeSqtSDehe5UK9JAH5SdpOvfdOGhNcaDhgH0YmTGGRd9QIDAQAB",
+  "host_permissions": [
+    "https://prod-in-a.online.tableau.com/*",
+    "https://app.powerbi.com/*",
+    "https://jm-saas-2.internal.thoughtspot.dev/*",
+    "http://localhost:8799/*"
+  ],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "web_accessible_resources": [
+    {
+      "resources": ["panel.html", "dist/*"],
+      "matches": ["https://prod-in-a.online.tableau.com/*", "https://app.powerbi.com/*"]
+    }
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://prod-in-a.online.tableau.com/*"],
+      "js": ["platforms/tableau/content.js"],
+      "css": ["platforms/tableau/content.css"],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": ["https://prod-in-a.online.tableau.com/*"],
+      "js": ["platforms/tableau/bridge.js"],
+      "run_at": "document_idle",
+      "all_frames": false,
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://app.powerbi.com/*"],
+      "js": ["platforms/powerbi/content.js"],
+      "css": ["platforms/powerbi/content.css"],
+      "run_at": "document_idle",
+      "all_frames": true
+    },
+    {
+      "matches": ["https://app.powerbi.com/*"],
+      "js": ["platforms/powerbi/bridge.js"],
+      "run_at": "document_start",
+      "all_frames": false,
+      "world": "MAIN"
+    }
+  ]
+}

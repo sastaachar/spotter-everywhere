@@ -413,7 +413,7 @@
     const frame = document.createElement('iframe');
     frame.className = FRAME_CLASS;
     frame.title = 'Spotter';
-    frame.src = chrome.runtime.getURL('panel.html') + '#' + encodeURIComponent(JSON.stringify(context));
+    frame.src = chrome.runtime.getURL('panel.html') + '#' + encodeURIComponent(JSON.stringify({ ...context, platform: PLATFORM }));
     document.body.appendChild(frame);
     document.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: context }));
   }

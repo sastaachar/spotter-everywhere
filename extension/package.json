@@ -1,5 +1,5 @@
 {
-  "name": "@spotter-everywhere/extension-tableau",
+  "name": "@spotter-everywhere/extension",
   "version": "0.1.0",
   "private": true,
   "type": "module",
