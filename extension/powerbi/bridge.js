@@ -289,6 +289,9 @@
       filterConditions: (query.Where || []).length,
       columns,
       rows: rows.map((r) => r.map((v, i) => formatValue(v, columns[i] && columns[i].format))),
+      // Unformatted values as well: loading data into ThoughtSpot needs real
+      // numbers, not "$1,220,718.00", or every measure arrives as text.
+      rawRows: rows,
       rowCount: rows.length,
       pages,
       truncated: !!restartTokens,
