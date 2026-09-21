@@ -4,6 +4,9 @@ import { secureHeaders } from 'hono/secure-headers';
 import { bearerAuth } from './auth';
 import { rateLimit } from './rate-limit';
 import { SessionStore, ValidationError, parseSessionInput, summarize } from './session';
+import { extractTwbXml, parseTableauColumns } from './tableau';
+import { generateTml } from './tml';
+import { importTml, findGuid } from './thoughtspot';
 
 export interface AppOptions {
   apiKey: string;
@@ -11,6 +14,9 @@ export interface AppOptions {
   maxBodyBytes?: number;
   rateLimitPerMinute?: number;
   now?: () => number;
+  /** Optional: when set, /worksheet also imports the worksheet into ThoughtSpot. */
+  tsHost?: string;
+  tsToken?: string;
 }
 
 export const DEFAULT_MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -40,6 +46,68 @@ export function createApp(options: AppOptions) {
     const input = parseSessionInput(body);
     const session = store.create(input);
     return c.json(summarize(session), 201, { Location: `/session/${session.id}` });
+  });
+
+  // Turn an uploaded Tableau workbook into a Spotter-searchable worksheet.
+  // Body: multipart/form-data { userid, platform, file } — or JSON
+  // { userid, platform, filename, fileBase64 }. Returns the worksheet the
+  // extension can point Spotter at (imported GUID + searchUrl when TS is
+  // configured, otherwise the generated schema + TML to import).
+  app.post('/worksheet', bodyLimit({ maxSize: options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES }), async (c) => {
+    const ct = c.req.header('content-type') ?? '';
+    let userid = '';
+    let platform = '';
+    let filename = '';
+    let bytes: Uint8Array | null = null;
+
+    if (ct.includes('multipart/form-data')) {
+      const form = await c.req.formData();
+      userid = String(form.get('userid') ?? '');
+      platform = String(form.get('platform') ?? '');
+      const file = form.get('file');
+      if (file && typeof file !== 'string') {
+        bytes = new Uint8Array(await file.arrayBuffer());
+        filename = file.name;
+      }
+    } else if (ct.includes('application/json')) {
+      const b = await c.req.json().catch(() => ({})) as Record<string, string>;
+      userid = b.userid ?? '';
+      platform = b.platform ?? '';
+      filename = b.filename ?? '';
+      if (b.fileBase64) bytes = Uint8Array.from(atob(b.fileBase64), (ch) => ch.charCodeAt(0));
+    }
+
+    if (!userid || !platform) return c.json({ error: 'invalid_request', detail: 'userid and platform are required' }, 400);
+    if (!bytes || bytes.length === 0) return c.json({ error: 'invalid_request', detail: 'no .twb/.twbx file provided' }, 400);
+
+    let columns;
+    try {
+      columns = parseTableauColumns(extractTwbXml(bytes));
+    } catch (e) {
+      return c.json({ error: 'parse_failed', detail: (e as Error).message }, 422);
+    }
+    if (!columns.length) return c.json({ error: 'no_columns', detail: 'no fields found in the workbook' }, 422);
+
+    const name = `${userid} · ${platform} · ${(filename || 'workbook').replace(/\.(twbx?|tdsx?)$/i, '')}`.slice(0, 80);
+    const tml = generateTml(name, columns);
+
+    let worksheetId: string | undefined;
+    let searchUrl: string | undefined;
+    if (options.tsHost && options.tsToken) {
+      const result = await importTml({ host: options.tsHost, token: options.tsToken }, [tml.tableTml, tml.worksheetTml]);
+      worksheetId = findGuid(result, name);
+      if (worksheetId) searchUrl = `${options.tsHost.replace(/\/$/, '')}/#/data/tables/${worksheetId}`;
+    }
+
+    return c.json({
+      userid,
+      platform,
+      worksheet: { name, columns },
+      worksheetId,
+      searchUrl,
+      imported: Boolean(worksheetId),
+      tml,
+    }, 201);
   });
 
   app.get('/session/:id', (c) => {

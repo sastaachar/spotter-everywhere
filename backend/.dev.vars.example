@@ -1,0 +1,5 @@
+# For local `wrangler dev` (Cloudflare). Never commit real values.
+SPOTTER_API_KEY=dev-local-key
+# Optional: set to auto-import the worksheet into ThoughtSpot
+TS_HOST=
+TS_TOKEN=
