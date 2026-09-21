@@ -1,7 +1,7 @@
 import { initSpotter, TableauSpotterEmbed, PowerBiSpotterEmbed, thoughtSpotConfig } from '../../ui/spotter-embed/index.js';
-import { devCredentials } from './dev-credentials.js';
 
 const CLOSE_EVENT = 'spotter:close';
+const EMBED_TOKEN = 'spotter:embed-token';
 const EMBEDS = { tableau: TableauSpotterEmbed, powerbi: PowerBiSpotterEmbed };
 const SUBJECT = {
   tableau: (c) => [c.worksheet, c.dashboard || c.workbook],
@@ -29,20 +29,30 @@ document.getElementById('close').addEventListener('click', () => {
   window.parent.postMessage({ type: CLOSE_EVENT }, '*');
 });
 
+// The backend mints the trusted-auth token as this platform user; the panel
+// never holds cluster credentials. Same userid as createDataset uses.
+function requestEmbedToken(context) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({
+      type: EMBED_TOKEN,
+      payload: { userid: context.workspace || context.site || 'user', platform: context.platform || 'tableau' },
+    }, (res) => {
+      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+      if (!res) return reject(new Error('No response from the extension worker.'));
+      if (res.error) return reject(new Error(res.error));
+      resolve(res.token);
+    });
+  });
+}
+
 async function main() {
   const context = readContext();
   const platform = context.platform === 'powerbi' ? 'powerbi' : 'tableau';
   const Embed = EMBEDS[platform];
   subject.textContent = (SUBJECT[platform](context) || []).filter(Boolean).join(' · ');
 
-  const { username, password } = devCredentials;
-  if (!username || !password) {
-    showStatus('Set the ThoughtSpot username and password in extension/src/dev-credentials.js to start Spotter.', true);
-    return;
-  }
-
   showStatus('Connecting to ThoughtSpot…', false);
-  initSpotter({ thoughtSpotHost: thoughtSpotConfig.host, username, password });
+  initSpotter({ thoughtSpotHost: thoughtSpotConfig.host, getAuthToken: () => requestEmbedToken(context) });
 
   // SpotterEmbed with no model never finishes rendering and never errors, so
   // the panel would sit on "Connecting…" forever. Say so instead.

@@ -3,5 +3,4 @@
 // ui/configs/thoughtspot-config.js via the SDK's initSpotter default.
 export const config = {
   backendUrl: 'http://localhost:8799',
-  backendApiKey: '',
 };
