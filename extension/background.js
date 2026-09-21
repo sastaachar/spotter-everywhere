@@ -3,9 +3,35 @@ import { devCredentials } from './src/dev-credentials.js';
 
 const CREATE_SESSION = 'spotter:create-session';
 const CREATE_DATASET = 'spotter:create-dataset';
+const CHECK_DATASET = 'spotter:check-dataset';
 const CREATE_LIVEBOARD = 'spotter:create-liveboard';
 const GET_LIVEBOARD = 'spotter:get-liveboard';
 const EMBED_TOKEN = 'spotter:embed-token';
+const CACHE_GET = 'spotter:cache-get';
+const CACHE_SET = 'spotter:cache-set';
+
+// Per-sheet resume cache (chrome.storage.local): lets a reload/reopen skip the
+// slow "pull rows -> load into ThoughtSpot" pipeline and open the worksheet we
+// already built. Content scripts can't touch chrome.storage, so it lives here.
+async function cacheGet(key) {
+  if (!key) return { entry: null };
+  try {
+    const all = await chrome.storage.local.get(key);
+    return { entry: all[key] || null };
+  } catch (err) {
+    return { entry: null };
+  }
+}
+
+async function cacheSet(key, entry) {
+  if (!key) return { ok: false };
+  try {
+    await chrome.storage.local.set({ [key]: entry });
+    return { ok: true };
+  } catch (err) {
+    return { error: String((err && err.message) || err) };
+  }
+}
 
 async function createSession(payload) {
   if (!config.backendUrl) return { error: 'No backend configured (see extension/src/config.js).' };
@@ -59,6 +85,33 @@ async function createDataset(payload) {
     return { error: 'Worksheet build failed: ' + code };
   }
   return { dataset: body };
+}
+
+// Read-only: does the user / data model / worksheet already exist for this
+// sheet? Lets the panel show what's done and skip rebuilding. Never throws — a
+// backend/network failure returns { error } and the caller falls back to build.
+async function checkDataset(payload) {
+  if (!config.backendUrl) return { error: 'No backend configured (see extension/src/config.js).' };
+  let res;
+  try {
+    res = await fetch(new URL('/dataset/check', config.backendUrl), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(devCredentials.backendApiKey ? { Authorization: 'Bearer ' + devCredentials.backendApiKey } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    return { error: 'Could not reach the backend: ' + (err && err.message ? err.message : String(err)) };
+  }
+  let body = null;
+  try { body = await res.json(); } catch { body = null; }
+  if (!res.ok) {
+    const code = body && (body.detail || body.error) ? (body.detail || body.error) : 'HTTP ' + res.status;
+    return { error: 'Existence check failed: ' + code };
+  }
+  return { check: body };
 }
 
 // Cheap existence check by (platform, guid) — no download, no build.
@@ -147,6 +200,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     createDataset(message.payload).then(sendResponse, (err) => sendResponse({ error: String((err && err.message) || err) }));
     return true;
   }
+  if (message.type === CHECK_DATASET) {
+    checkDataset(message.payload).then(sendResponse, (err) => sendResponse({ error: String((err && err.message) || err) }));
+    return true;
+  }
   if (message.type === GET_LIVEBOARD) {
     getLiveboard(message.payload || {}).then(sendResponse, (err) => sendResponse({ error: String((err && err.message) || err) }));
     return true;
@@ -157,6 +214,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message.type === EMBED_TOKEN) {
     embedToken(message.payload || {}).then(sendResponse, (err) => sendResponse({ error: String((err && err.message) || err) }));
+    return true;
+  }
+  if (message.type === CACHE_GET) {
+    cacheGet(message.payload && message.payload.key).then(sendResponse, () => sendResponse({ entry: null }));
+    return true;
+  }
+  if (message.type === CACHE_SET) {
+    cacheSet(message.payload && message.payload.key, message.payload && message.payload.entry).then(sendResponse, (err) => sendResponse({ error: String((err && err.message) || err) }));
     return true;
   }
   return false;

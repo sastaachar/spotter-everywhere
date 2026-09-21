@@ -21,8 +21,12 @@
   const UNDERLYING_CHUNK = 500;
   const CREATE_SESSION = 'spotter:create-session';
   const CREATE_DATASET = 'spotter:create-dataset';
+  const CHECK_DATASET = 'spotter:check-dataset';
   const CREATE_LIVEBOARD = 'spotter:create-liveboard';
   const GET_LIVEBOARD = 'spotter:get-liveboard';
+  const CACHE_GET = 'spotter:cache-get';
+  const CACHE_SET = 'spotter:cache-set';
+  const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
   const PLATFORM = 'tableau';
   const LB_BUTTON_CLASS = 'ts-lb-btn';
   const FRAME_CLASS = 'ts-spotter-frame';
@@ -81,13 +85,13 @@
     btn.title = 'Ask Spotter about this sheet';
     btn.setAttribute('aria-label', 'Open Spotter');
     btn.innerHTML = SPARKLE_SVG + '<span>Spotter</span>';
-    btn.title = 'Ask Spotter about this sheet (Alt+click for sheet details)';
+    btn.title = 'Ask Spotter about this sheet (Shift+click to rebuild, Alt+click for details)';
     btn.addEventListener('click', (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
       const context = vizContext(titleRoot, sheetTitle());
       if (ev.altKey) openPanel(context);
-      else openSpotter(context);
+      else openSpotter(context, { rebuild: ev.shiftKey });
     });
     btn.addEventListener('mousedown', (ev) => ev.stopPropagation());
     return btn;
@@ -180,6 +184,7 @@
     const loading = el('aside', FRAME_CLASS + ' ts-spotter-loading');
     loading.textContent = 'Preparing the liveboard…';
     document.body.appendChild(loading);
+    if (!extensionAlive()) { loading.textContent = RELOAD_MSG; return; }
 
     const fail = (msg) => {
       loading.textContent = msg;
@@ -521,6 +526,7 @@
   function closePanel() {
     document.querySelectorAll('.' + PANEL_CLASS).forEach((el) => el.remove());
     document.querySelectorAll('.' + FRAME_CLASS).forEach((el) => el.remove());
+    if (window.__spotterPanel) window.__spotterPanel.close();
   }
 
   // Best-effort logged-in Tableau user (via the bridge); fall back to the site.
@@ -544,48 +550,216 @@
     });
   }
 
-  // The real pipeline: read this sheet's rows -> provision/reuse the user + load
-  // into Falcon + build a worksheet -> open panel.html embedding THAT worksheet,
-  // authenticated AS the user. Reuses an existing TS user (JIT is idempotent).
-  async function openSpotter(context) {
+  // Ask the backend what already exists for this sheet (user / data model /
+  // worksheet). Resolves null on any failure so the caller just builds instead.
+  function checkDataset(payload) {
+    return new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ type: CHECK_DATASET, payload }, (res) => {
+          if (chrome.runtime.lastError || !res || res.error) return resolve(null);
+          resolve(res.check || null);
+        });
+      } catch (e) {
+        resolve(null);
+      }
+    });
+  }
+
+  // Identity of the viewed sheet — stable across reloads (Tableau regenerates
+  // only the title element id, not these fields). The backend refreshes the data
+  // in place on rebuild; Shift+click forces that path when a filter changed.
+  function datasetCacheKey(context) {
+    return [
+      'ds', PLATFORM, context.site, context.workbook,
+      context.dashboard || '', context.worksheet || '', context.sheetTitle || '',
+    ].join('|');
+  }
+
+  // The resume cache lives in the background service worker (chrome.storage);
+  // both calls degrade to a miss/no-op if the worker is unreachable.
+  function cacheGet(key) {
+    return new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ type: CACHE_GET, payload: { key } }, (res) => {
+          if (chrome.runtime.lastError || !res) return resolve(null);
+          resolve(res.entry || null);
+        });
+      } catch (e) {
+        resolve(null);
+      }
+    });
+  }
+
+  function cacheSet(key, entry) {
+    return new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ type: CACHE_SET, payload: { key, entry } }, () => resolve());
+      } catch (e) {
+        resolve();
+      }
+    });
+  }
+
+  // Progress checklist shown in the loading overlay: each step spins while
+  // active and turns into a green check when done or reused (red on failure).
+  const STEP_DEFS = [
+    { key: 'user', label: 'Signing in' },
+    { key: 'check', label: 'Checking ThoughtSpot' },
+    { key: 'data', label: 'Reading sheet data' },
+    { key: 'load', label: 'Loading into ThoughtSpot' },
+    { key: 'worksheet', label: 'Preparing the worksheet' },
+    { key: 'open', label: 'Opening Spotter' },
+  ];
+  function buildChecklist(container) {
+    container.textContent = '';
+    const wrap = el('div', 'ts-spotter-steps');
+    wrap.appendChild(el('div', 'ts-spotter-steps-title', 'Setting up Spotter'));
+    const rows = {};
+    STEP_DEFS.forEach((s) => {
+      const row = el('div', 'ts-spotter-step');
+      row.dataset.state = 'pending';
+      const icon = el('span', 'ts-spotter-step-icon');
+      const label = el('span', 'ts-spotter-step-label', s.label);
+      const detail = el('span', 'ts-spotter-step-detail');
+      row.append(icon, label, detail);
+      wrap.appendChild(row);
+      rows[s.key] = { row, detail };
+    });
+    container.appendChild(wrap);
+    // state: pending | active | done | skip | error; detail is optional text.
+    return function setStep(key, state, detailText) {
+      const r = rows[key];
+      if (!r) return;
+      r.row.dataset.state = state;
+      if (detailText != null) r.detail.textContent = detailText;
+    };
+  }
+
+  // True while this content script still belongs to a live extension context.
+  // After the extension is reloaded/updated, an already-injected content script
+  // lingers but its chrome.* calls throw "Extension context invalidated" until
+  // the page is reloaded — detect that and ask for a refresh instead of crashing.
+  function extensionAlive() {
+    try { return Boolean(chrome.runtime && chrome.runtime.id); } catch (e) { return false; }
+  }
+  const RELOAD_MSG = 'Spotter was updated — reload this page (⌘R / F5) to continue.';
+
+  // The real pipeline: verify what already exists -> (reuse, or read rows +
+  // load into Falcon + build a worksheet) -> open panel.html embedding THAT
+  // worksheet, authenticated AS the user. Each step reports into the checklist;
+  // a cache hit resumes instantly and a backend check lets us skip a rebuild.
+  async function openSpotter(context, options = {}) {
     closePanel();
     const loading = el('aside', FRAME_CLASS + ' ts-spotter-loading');
-    loading.textContent = 'Loading this sheet into Spotter…';
     document.body.appendChild(loading);
+    if (!extensionAlive()) { loading.textContent = RELOAD_MSG; return; }
     document.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: context }));
+    const setStep = buildChecklist(loading);
 
     const openPanelFrame = (extra) => {
+      // Mount Spotter in the Tableau page, NOT the extension's panel.html: the
+      // SDK derives hostAppUrl from window.location.host, and from a
+      // chrome-extension:// origin the cluster 401s every embed call so Spotter
+      // never starts a conversation. window.__spotterPanel is set by
+      // dist/inpage-panel.js, loaded as a content script alongside this one.
+      const panel = window.__spotterPanel;
+      if (!panel) {
+        loading.textContent = 'Spotter could not load — rebuild the extension (`npm run build`).';
+        return;
+      }
       loading.remove();
-      const frame = document.createElement('iframe');
-      frame.className = FRAME_CLASS;
-      frame.title = 'Spotter';
-      frame.src = chrome.runtime.getURL('panel.html') + '#'
-        + encodeURIComponent(JSON.stringify({ ...context, platform: PLATFORM, ...extra }));
-      document.body.appendChild(frame);
+      panel.open({ ...context, platform: PLATFORM, ...extra }, FRAME_CLASS);
     };
+
+    const cacheKey = datasetCacheKey(context);
+
+    // Fast resume via the local cache: reopen last time's worksheet with no
+    // network. Shift+click (options.rebuild) skips this to refresh the data.
+    if (!options.rebuild && context.worksheet) {
+      const cached = await cacheGet(cacheKey);
+      if (cached && cached.worksheetId && Date.now() - (cached.ts || 0) < CACHE_TTL_MS) {
+        setStep('user', 'done', cached.userid);
+        setStep('check', 'done', 'cached');
+        setStep('data', 'skip', 'reused');
+        setStep('load', 'skip', 'reused');
+        setStep('worksheet', 'skip', 'reused');
+        setStep('open', 'active');
+        openPanelFrame({
+          worksheetId: cached.worksheetId, worksheetName: cached.worksheetName,
+          userid: cached.userid, workspace: cached.userid, cached: true,
+        });
+        return;
+      }
+    }
 
     let userid = context.site || 'tableau_user';
     try {
+      setStep('user', 'active');
       userid = await resolveUserId(context);
+      setStep('user', 'done', userid);
+
       let worksheetId = null;
       let worksheetName = null;
+
       if (context.worksheet) {
-        loading.textContent = 'Loading “' + context.worksheet + '” into ThoughtSpot…';
-        const data = await requestWorksheetData(context.worksheet, 'underlying');
-        const body = await createDataset({
-          userid, platform: PLATFORM,
-          name: context.sheetTitle || context.worksheet,
-          data: { columns: data.columns, rows: data.rows },
-        });
-        worksheetId = (body.embed && body.embed.worksheetId)
-          || (body.dataset && (body.dataset.worksheetId || body.dataset.tableId));
-        worksheetName = body.dataset && (body.dataset.worksheetName || body.dataset.tableName);
+        const name = context.sheetTitle || context.worksheet;
+
+        // Verify what already exists before doing any work (the backend "cache").
+        setStep('check', 'active');
+        const check = await checkDataset({ userid, platform: PLATFORM, name });
+        if (check) {
+          setStep('user', 'done', check.user && check.user.exists ? 'existing user' : 'new user');
+          setStep('check', 'done', check.ready ? 'already built' : 'needs build');
+        } else {
+          setStep('check', 'done', 'unavailable');
+        }
+
+        const reuse = !options.rebuild && check && check.ready && check.worksheet && check.worksheet.exists;
+        if (reuse) {
+          // User / data model / worksheet all exist — reuse, skip pull + upload.
+          setStep('data', 'skip', 'reused');
+          setStep('load', 'done', check.table && check.table.exists ? 'exists' : 'reused');
+          setStep('worksheet', 'done', 'exists');
+          worksheetId = check.worksheet.id;
+          worksheetName = check.worksheet.name;
+        } else {
+          // Build (or refresh on rebuild): read rows -> load -> worksheet.
+          setStep('data', 'active');
+          const data = await requestWorksheetData(context.worksheet, 'underlying');
+          setStep('data', 'done', data.rows.length.toLocaleString() + ' rows');
+
+          setStep('load', 'active');
+          setStep('worksheet', 'active');
+          const body = await createDataset({
+            userid, platform: PLATFORM, name,
+            data: { columns: data.columns, rows: data.rows },
+          });
+          const tableId = body.dataset && body.dataset.tableId;
+          worksheetId = (body.embed && body.embed.worksheetId)
+            || (body.dataset && (body.dataset.worksheetId || body.dataset.tableId));
+          worksheetName = body.dataset && (body.dataset.worksheetName || body.dataset.tableName);
+          setStep('load', tableId ? 'done' : 'error', tableId ? '' : 'not loaded');
+          setStep('worksheet', worksheetId ? 'done' : 'error', worksheetId ? '' : 'no model');
+        }
+
+        // Remember the outcome so the next open of this sheet resumes instantly.
+        if (worksheetId) {
+          await cacheSet(cacheKey, { worksheetId, worksheetName, userid, ts: Date.now() });
+        }
+      } else {
+        setStep('check', 'skip');
+        setStep('data', 'skip');
+        setStep('load', 'skip');
+        setStep('worksheet', 'skip');
       }
+
       // workspace is the userid the embed authenticates as — keep it equal to the
       // one /dataset provisioned/shared for, so access lines up.
+      setStep('open', 'active');
       openPanelFrame({ worksheetId, worksheetName, userid, workspace: userid });
     } catch (err) {
-      // Load unavailable — open the panel on the configured default model.
+      // A step failed — open the panel on the configured default model so the
+      // user isn't stranded on the checklist; the panel shows the load error.
       openPanelFrame({ userid, workspace: userid, loadError: err.message });
     }
   }

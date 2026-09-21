@@ -65,8 +65,9 @@ export function sanitizeUsername(raw: string): string {
   );
 }
 
-/** Look up a user by exact (sanitized) name; undefined when absent. */
-async function searchUser(env: TsEnv, username: string): Promise<TsUser | undefined> {
+/** Look up a user by exact (sanitized) name; undefined when absent. Read-only,
+ *  so existence checks can reuse it without risking a create. */
+export async function searchUser(env: TsEnv, username: string): Promise<TsUser | undefined> {
   const res = await ts(env, '/api/rest/2.0/users/search', { user_identifier: username });
   const list = Array.isArray(res) ? (res as Record<string, unknown>[]) : [];
   const match = list.find((u) => u && typeof u === 'object' && u.name === username);

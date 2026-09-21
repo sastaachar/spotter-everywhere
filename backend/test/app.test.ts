@@ -179,6 +179,33 @@ describe('SessionStore', () => {
   });
 });
 
+describe('POST /dataset/check', () => {
+  test('503 when the cluster is not configured', async () => {
+    const res = await makeApp().request('/dataset/check', {
+      method: 'POST', headers: JSON_HEADERS,
+      body: JSON.stringify({ userid: 'u', platform: 'tableau', name: 'Sales' }),
+    });
+    expect(res.status).toBe(503);
+    expect((await json(res)).error).toBe('not_configured');
+  });
+
+  test('400 when userid/platform are missing (validated before any lookup)', async () => {
+    const app = makeApp({ tsHost: 'https://ts.example', tsToken: 'admin-token' });
+    const res = await app.request('/dataset/check', {
+      method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ name: 'Sales' }),
+    });
+    expect(res.status).toBe(400);
+    expect((await json(res)).error).toBe('invalid_request');
+  });
+
+  test('still requires the API key', async () => {
+    const res = await makeApp().request('/dataset/check', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    });
+    expect(res.status).toBe(401);
+  });
+});
+
 describe('rate limit', () => {
   test('returns 429 once the window is exhausted and resets after it', async () => {
     let clock = 0;
