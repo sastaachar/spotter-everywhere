@@ -32,6 +32,21 @@
 .ts-spotter-btn:focus-visible { outline: 2px solid #2770ef; outline-offset: 1px; }
 .ts-spotter-btn svg { width: 12px; height: 12px; fill: currentColor; }
 
+.ts-spotter-frame {
+  all: initial;
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 520px;
+  max-width: 90vw;
+  height: 100vh;
+  border: 0;
+  border-left: 1px solid #e0e0e0;
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.08);
+  background: #ffffff;
+  z-index: 2147483647;
+}
+
 .ts-spotter-panel {
   all: initial;
   position: fixed;
@@ -155,34 +170,3 @@
   overflow-wrap: anywhere;
 }
 
-.ts-spotter-panel .ts-spotter-tabs {
-  flex: 0 0 auto;
-  display: flex;
-  gap: 4px;
-  border-bottom: 1px solid #e0e0e0;
-}
-.ts-spotter-panel .ts-spotter-tab {
-  all: initial;
-  padding: 5px 10px;
-  font: 500 12px/16px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  color: #666;
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-}
-.ts-spotter-panel .ts-spotter-tab.is-active {
-  color: #2770ef;
-  border-bottom-color: #2770ef;
-}
-.ts-spotter-panel .ts-spotter-frame {
-  border: 0;
-  width: 100%;
-  flex: 1;
-  min-height: 0;
-}
-.ts-spotter-panel .ts-spotter-table-view {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-.ts-spotter-panel .ts-spotter-body > [hidden] { display: none !important; }

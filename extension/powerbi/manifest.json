@@ -5,7 +5,9 @@
   "description": "Adds a Spotter button to Power BI report visual titles.",
   "host_permissions": [
     "https://app.powerbi.com/*",
-    "http://localhost:8787/*"
+    "https://jm-saas-2.internal.thoughtspot.dev/*",
+    "http://localhost:8787/*",
+    "http://localhost:8799/*"
   ],
   "content_scripts": [
     {
@@ -43,7 +45,9 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "panel.html"
+        "panel.html",
+        "src/*",
+        "vendor/*"
       ],
       "matches": [
         "https://app.powerbi.com/*"

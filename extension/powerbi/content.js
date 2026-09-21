@@ -20,6 +20,15 @@
   const LAYOUT_EVENT = 'spotter:layout';
   const PREVIEW_ROWS = 100;
   const CREATE_SESSION = 'spotter:create-session';
+  const PLATFORM = 'powerbi';
+  const FRAME_CLASS = 'ts-spotter-frame';
+  const CLOSE_EVENT = 'spotter:close';
+  const EXTENSION_ORIGIN = new URL(chrome.runtime.getURL('')).origin;
+  // Backend that loads a visual's rows into ThoughtSpot and wraps them in a
+  // worksheet. Point at the local Worker (wrangler dev) or the deployed URL.
+  const BACKEND_URL = 'http://localhost:8799';
+  // Dev only. Do NOT ship a shared key in a real extension.
+  const BACKEND_API_KEY = '';
   const CANVAS_SELECTOR = '.displayAreaContainer, .displayArea';
   // Power BI's dialogs live in a cdk overlay host at z-index 10000005, and the
   // report's own visuals top out around 33000. Sit between the two so the
@@ -161,13 +170,15 @@
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = BUTTON_CLASS;
-    btn.title = 'Ask Spotter about this visual';
+    btn.title = 'Ask Spotter about this visual (Alt+click for visual details)';
     btn.setAttribute('aria-label', 'Open Spotter');
     btn.innerHTML = SPARKLE_SVG + '<span>Spotter</span>';
     btn.addEventListener('click', (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
-      openPanel(vizContext(titleEl, visualTitle()));
+      const context = vizContext(titleEl, visualTitle());
+      if (ev.altKey) openPanel(context);
+      else openSpotter(context);
     });
     // The title is a sub-selectable, direct-edit region in Power BI; swallow the
     // events it uses to enter selection/edit mode.
@@ -317,24 +328,17 @@
 
     const body = document.createElement('div');
     body.className = 'ts-spotter-body';
-
-    // Spotter runs in an extension page: MV3 forbids remote scripts, and Power
-    // BI's CSP would block framing the ThoughtSpot host from this document.
-    const spotter = document.createElement('iframe');
-    spotter.className = 'ts-spotter-frame';
-    spotter.src = chrome.runtime.getURL('panel.html');
-
-    const table = document.createElement('div');
-    table.className = 'ts-spotter-table-view';
-    table.textContent = context.visualId ? 'Loading data\u2026' : 'No visual id \u2014 cannot query this visual.';
-    table.hidden = true;
-
-    body.append(spotter, table);
+    body.textContent = context.visualId ? 'Loading data\u2026' : 'No visual id \u2014 cannot query this visual.';
 
     let lastResult = null;
-    const tabs = buildTabs(spotter, table);
-    panel.append(header, tabs, buildRows(context), body, buildSendButton(context, () => lastResult));
-    if (context.visualId) loadData(table, context.visualId, (r) => { lastResult = r; });
+    panel.append(
+      header,
+      buildRows(context),
+      body,
+      worksheetBuilderSection(context, () => lastResult),
+      buildSendButton(context, () => lastResult)
+    );
+    if (context.visualId) loadData(body, context.visualId, (r) => { lastResult = r; });
     document.body.appendChild(panel);
 
     document.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: context }));
@@ -421,23 +425,64 @@
     };
   }
 
-  function buildTabs(spotter, table) {
-    const wrap = document.createElement('div');
-    wrap.className = 'ts-spotter-tabs';
-    const views = [['Spotter', spotter], ['Data', table]];
-    const buttons = views.map(([label, el]) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'ts-spotter-tab';
-      b.textContent = label;
-      b.addEventListener('click', () => {
-        views.forEach(([, other]) => { other.hidden = other !== el; });
-        buttons.forEach((other) => other.classList.toggle('is-active', other === b));
-      });
-      wrap.appendChild(b);
-      return b;
+  // Power BI has no workbook file to upload, so the equivalent of Tableau's
+  // worksheet builder is the visual's own rows: POST them to /dataset, which
+  // loads them into ThoughtSpot and wraps them in a worksheet Spotter can
+  // answer from.
+  async function createDataset(context, result) {
+    const res = await fetch(BACKEND_URL + '/dataset', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(BACKEND_API_KEY ? { Authorization: 'Bearer ' + BACKEND_API_KEY } : {}),
+      },
+      body: JSON.stringify({
+        userid: context.workspace || 'user',
+        platform: PLATFORM,
+        name: [context.reportTitle, context.visualTitle].filter(Boolean).join(' - ') || 'Power BI visual',
+        data: {
+          columns: result.columns.map((c) => ({ name: c.name })),
+          // Raw values, not the formatted strings the table shows, or every
+          // measure loads as text.
+          rows: result.rawRows || result.rows,
+        },
+      }),
     });
-    buttons[0].classList.add('is-active');
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      const detail = body && (body.detail || body.error);
+      throw new Error('Worksheet build failed: ' + (detail || 'HTTP ' + res.status));
+    }
+    return body;
+  }
+
+  function worksheetBuilderSection(context, getResult) {
+    const wrap = document.createElement('div');
+    wrap.className = 'ts-spotter-actions';
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'ts-spotter-more';
+    go.textContent = 'Create Spotter worksheet';
+    const note = document.createElement('span');
+    note.className = 'ts-spotter-note';
+    go.addEventListener('click', async () => {
+      const result = getResult();
+      if (!result || !result.columns.length) { note.textContent = 'No data loaded yet.'; return; }
+      go.disabled = true;
+      note.textContent = 'Loading ' + result.rowCount + ' rows into ThoughtSpot\u2026';
+      try {
+        const built = await createDataset(context, result);
+        const worksheetId = (built.embed && built.embed.worksheetId)
+          || (built.dataset && built.dataset.worksheetId);
+        note.textContent = worksheetId ? 'Worksheet ready' : 'Built, but no worksheet id returned';
+        if (worksheetId) openSpotter({ ...context, worksheetId });
+      } catch (err) {
+        note.textContent = err.message;
+      } finally {
+        go.disabled = false;
+      }
+    });
+    wrap.append(go, note);
     return wrap;
   }
 
@@ -488,7 +533,22 @@
 
   function closePanel() {
     document.querySelectorAll('.' + PANEL_CLASS).forEach((el) => el.remove());
+    document.querySelectorAll('.' + FRAME_CLASS).forEach((el) => el.remove());
   }
+
+  function openSpotter(context) {
+    closePanel();
+    const frame = document.createElement('iframe');
+    frame.className = FRAME_CLASS;
+    frame.title = 'Spotter';
+    frame.src = chrome.runtime.getURL('panel.html') + '#' + encodeURIComponent(JSON.stringify(context));
+    document.body.appendChild(frame);
+    document.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: context }));
+  }
+
+  addEventListener('message', (ev) => {
+    if (ev.origin === EXTENSION_ORIGIN && ev.data && ev.data.type === CLOSE_EVENT) closePanel();
+  });
 
   // Selectors are the part most likely to drift on a Power BI release, so
   // report what was actually on the page when nothing matched.
