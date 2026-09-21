@@ -18,6 +18,10 @@
     <input id="backendUrl" type="url" placeholder="https://spotter-backend.example" required>
     <label for="apiKey">API key</label>
     <input id="apiKey" type="password" autocomplete="off" required>
+    <label for="worksheetId">ThoughtSpot model id</label>
+    <input id="worksheetId" type="text" placeholder="guid of the model Spotter answers from" required>
+    <label for="thoughtSpotHost">ThoughtSpot host <span style="font-weight:400;color:#666">(optional override)</span></label>
+    <input id="thoughtSpotHost" type="url" placeholder="https://your-cluster.thoughtspot.cloud">
     <button type="submit">Save</button><span id="status"></span>
   </form>
   <script src="options.js"></script>
