@@ -111,8 +111,8 @@ export function initSpotter({ username, password, ...config }) {
   // which is the bare extension id (no scheme) — an invalid URL. Force a proper
   // one via additionalFlags. Caller can override.
   const origin = (typeof location !== 'undefined' && location.origin) || thoughtSpotHost;
-  const additionalFlags = { hostAppUrl: origin, ...(config.additionalFlags || {}) };
-  return init({ ...config, thoughtSpotHost, getAuthToken, additionalFlags, authType: AuthType.TrustedAuthTokenCookieless });
+  // const additionalFlags = { hostAppUrl: origin, ...(config.additionalFlags || {}) };
+  return init({ ...config, thoughtSpotHost, getAuthToken, authType: AuthType.TrustedAuthTokenCookieless });
 }
 
 export class PlatformSpotterEmbed extends SpotterEmbed {
