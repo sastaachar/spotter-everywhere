@@ -49,7 +49,9 @@ async function main() {
   const context = readContext();
   const platform = context.platform === 'powerbi' ? 'powerbi' : 'tableau';
   const Embed = EMBEDS[platform];
-  subject.textContent = (SUBJECT[platform](context) || []).filter(Boolean).join(' · ');
+  const subjectParts = SUBJECT[platform](context) || [];
+  if (context.worksheetName) subjectParts.push('model: ' + context.worksheetName);
+  subject.textContent = subjectParts.filter(Boolean).join(' · ');
 
   showStatus('Connecting to ThoughtSpot…', false);
   initSpotter({ thoughtSpotHost: thoughtSpotConfig.host, getAuthToken: () => requestEmbedToken(context) });
@@ -58,7 +60,7 @@ async function main() {
   // the panel would sit on "Connecting…" forever. Say so instead.
   const worksheetId = context.worksheetId || thoughtSpotConfig.defaultWorksheetId;
   if (!worksheetId) {
-    showStatus('No ThoughtSpot model for this view yet. Alt+click the Spotter button and use "Create Spotter worksheet" first.', true);
+    showStatus('No ThoughtSpot model for this view' + (context.loadError ? ' (' + context.loadError + ')' : '') + '. Try again, or Alt+click to build one.', true);
     return;
   }
   const viewConfig = { worksheetId };

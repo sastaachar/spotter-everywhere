@@ -454,6 +454,7 @@
     try {
       userid = await resolveUserId(context);
       let worksheetId = null;
+      let worksheetName = null;
       if (context.worksheet) {
         loading.textContent = 'Loading “' + context.worksheet + '” into ThoughtSpot…';
         const data = await requestWorksheetData(context.worksheet, 'underlying');
@@ -464,11 +465,14 @@
         });
         worksheetId = (body.embed && body.embed.worksheetId)
           || (body.dataset && (body.dataset.worksheetId || body.dataset.tableId));
+        worksheetName = body.dataset && (body.dataset.worksheetName || body.dataset.tableName);
       }
-      openPanelFrame({ worksheetId, userid });
+      // workspace is the userid the embed authenticates as — keep it equal to the
+      // one /dataset provisioned/shared for, so access lines up.
+      openPanelFrame({ worksheetId, worksheetName, userid, workspace: userid });
     } catch (err) {
       // Load unavailable — open the panel on the configured default model.
-      openPanelFrame({ userid, loadError: err.message });
+      openPanelFrame({ userid, workspace: userid, loadError: err.message });
     }
   }
 
