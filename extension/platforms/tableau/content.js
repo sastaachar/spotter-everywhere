@@ -197,14 +197,24 @@
       if (found.body && found.body.exists) {
         liveboardId = found.body.liveboardId;
       } else {
-        if (!wb.downloadUrl) return fail('This workbook has no download URL; cannot build the liveboard.');
-        loading.textContent = 'Building the liveboard from the workbook…';
-        const fileBase64 = await fetchWorkbookBase64(wb.downloadUrl);
-        const res = await workerCall(CREATE_LIVEBOARD, { platform: PLATFORM, guid, filename: wb.name + '.twbx', fileBase64 });
+        // Build from real data: pull the dashboard's first worksheet's rows and
+        // send them, so the liveboard is populated (not an empty schema).
+        loading.textContent = 'Reading the dashboard data…';
+        const list = await requestWorksheetData(null, 'worksheets');
+        const first = list && list.worksheets && list.worksheets[0];
+        if (!first) return fail('No worksheets found in this view to build a liveboard from.');
+        loading.textContent = 'Loading “' + first.name + '” into ThoughtSpot…';
+        const data = await requestWorksheetData(first.name, 'underlying');
+        const columns = data.columns.map((col) => ({
+          name: col.name,
+          type: /int|float|real|number|decimal|double/i.test(col.type || '') ? 'MEASURE' : 'ATTRIBUTE',
+          dataType: col.type,
+        }));
+        const res = await workerCall(CREATE_LIVEBOARD, { platform: PLATFORM, guid, data: { columns, rows: data.rows } });
         if (res.error) return fail(res.error);
         liveboardId = res.body && res.body.liveboardId;
       }
-      if (!liveboardId) return fail('The liveboard was not created (the cluster may need data configured).');
+      if (!liveboardId) return fail('The liveboard was not created.');
 
       loading.remove();
       const frame = document.createElement('iframe');
