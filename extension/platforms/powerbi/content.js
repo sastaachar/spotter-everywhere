@@ -425,6 +425,19 @@
   // worksheet builder is the visual's own rows: POST them to /dataset, which
   // loads them into ThoughtSpot and wraps them in a worksheet Spotter can
   // answer from.
+  // Power BI emits INF/-INF/NaN for divide-by-zero measures (a Forecast % with
+  // no denominator). ThoughtSpot rejects those as invalid DOUBLEs and drops the
+  // WHOLE row, silently losing that row's other measures — that is a real
+  // under-count, not a rounding difference. Send them as empty instead so the
+  // row still loads and only the undefined cell is blank.
+  const NON_FINITE = /^-?(INF|INFINITY|NAN)$/i;
+  function loadableValue(value) {
+    if (value == null) return '';
+    if (typeof value === 'number') return Number.isFinite(value) ? value : '';
+    if (typeof value === 'string' && NON_FINITE.test(value.trim())) return '';
+    return value;
+  }
+
   function createDataset(context, result) {
     // Through the service worker so extension/src/config.js stays the only
     // place the backend URL and key are configured.
@@ -439,7 +452,7 @@
             columns: result.columns.map((c) => ({ name: c.name })),
             // Raw values, not the formatted strings the table shows, or every
             // measure loads as text.
-            rows: result.rawRows || result.rows,
+            rows: (result.rawRows || result.rows).map((row) => row.map(loadableValue)),
           },
         },
       }, (res) => {
