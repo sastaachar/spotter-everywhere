@@ -46,6 +46,62 @@ export function generateTml(name: string, columns: Column[]): GeneratedTml {
   return { tableName, worksheetName: name, tableTml, worksheetTml };
 }
 
+// Build a Liveboard TML on top of a worksheet: a table viz of everything, plus
+// one column-chart per measure broken down by the first attribute. TML shape is
+// version-sensitive — validate against the target cluster's tml/export.
+const MAX_CHART_VIZ = 6;
+
+export function generateLiveboardTml(name: string, worksheetName: string, columns: Column[]): string {
+  const attrs = columns.filter((c) => c.type === 'ATTRIBUTE');
+  const measures = columns.filter((c) => c.type === 'MEASURE');
+  const dim = attrs[0];
+
+  const answerCols = (names: string[]): string[] => ['      answer_columns:', ...names.map((n) => `      - name: "${q(n)}"`)];
+
+  const viz = (id: string, title: string, query: string, colNames: string[], chart?: string): string[] => {
+    const block = [
+      `  - id: ${id}`,
+      '    answer:',
+      `      name: "${q(title)}"`,
+      '      tables:',
+      `      - name: "${q(worksheetName)}"`,
+      `      search_query: "${q(query)}"`,
+      ...answerCols(colNames),
+    ];
+    if (chart) {
+      block.push('      chart:', `        type: ${chart}`);
+    } else {
+      block.push('      display_mode: TABLE_MODE');
+    }
+    return block;
+  };
+
+  const vizzes: string[][] = [];
+  const allNames = columns.map((c) => c.name);
+  vizzes.push(viz('Viz_1', `${name} — all data`, allNames.map((n) => `[${n}]`).join(' '), allNames));
+
+  if (dim) {
+    for (const m of measures.slice(0, MAX_CHART_VIZ)) {
+      vizzes.push(
+        viz(`Viz_${vizzes.length + 1}`, `${m.name} by ${dim.name}`, `[${dim.name}] [${m.name}]`, [dim.name, m.name], 'COLUMN')
+      );
+    }
+  }
+
+  const tiles = vizzes.map((_, i) => [`  - visualization_id: Viz_${i + 1}`, '    size: MEDIUM']).flat();
+
+  return [
+    'liveboard:',
+    `  name: "${q(name)}"`,
+    '  visualizations:',
+    ...vizzes.flat(),
+    '  layout:',
+    '    tiles:',
+    ...tiles,
+    '',
+  ].join('\n');
+}
+
 // Falcon numeric types default to measures; everything else to attributes.
 const MEASURE_TYPES = new Set(['INT64', 'INT32', 'DOUBLE', 'FLOAT', 'DECIMAL']);
 function columnTypeFor(dataType?: string): 'MEASURE' | 'ATTRIBUTE' {

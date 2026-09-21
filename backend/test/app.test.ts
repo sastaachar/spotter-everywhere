@@ -245,3 +245,38 @@ describe('POST /twb-to-tml', () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe('POST /liveboard', () => {
+  const TWB =
+    "<workbook><datasource caption='Sales DS'>" +
+    "<column name='[Sales]' caption='Sales' role='measure' datatype='real'/>" +
+    "<column name='[Profit]' caption='Profit' role='measure' datatype='real'/>" +
+    "<column name='[Region]' caption='Region' role='dimension' datatype='string'/>" +
+    '</datasource></workbook>';
+  const b64 = Buffer.from(TWB).toString('base64');
+  const lb = (app: ReturnType<typeof createApp>, body: unknown, query = '') =>
+    app.request('/liveboard' + query, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(body) });
+
+  test('returns table, worksheet and liveboard TML without a cluster', async () => {
+    const res = await lb(makeApp(), { filename: 'Sales.twb', fileBase64: b64 });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { imported: boolean; tml: { liveboardTml: string; worksheetTml: string } };
+    expect(body.imported).toBe(false);
+    expect(body.tml.liveboardTml).toContain('liveboard:');
+    // one table viz + one chart per measure (2)
+    expect(body.tml.liveboardTml.match(/- id: Viz_/g)?.length).toBe(3);
+    expect(body.tml.liveboardTml).toContain('[Region] [Sales]');
+    expect(body.tml.liveboardTml).toContain('type: COLUMN');
+  });
+
+  test('format=text returns the three docs joined', async () => {
+    const res = await lb(makeApp(), { fileBase64: b64 }, '?format=text');
+    expect(res.headers.get('content-type')).toContain('text/yaml');
+    const text = await res.text();
+    expect(text.match(/---/g)?.length).toBe(2);
+  });
+
+  test('400 without a file', async () => {
+    expect((await lb(makeApp(), {})).status).toBe(400);
+  });
+});
