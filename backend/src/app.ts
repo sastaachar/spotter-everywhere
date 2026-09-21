@@ -68,6 +68,8 @@ const liveboardKey = (platform: string, guid: string): string =>
 // The reuse key for a loaded dataset: (userid, platform, sheet name). /dataset
 // and /dataset/check derive the table + worksheet names from here so an
 // existence check and a build always agree on which objects to look for.
+// ── Dataset pipeline (shared by POST /dataset, JSON + streaming) ────────────
+
 function datasetNames(userid: string, platform: string, name: string) {
   const baseName = `${userid} ${platform} ${name || 'data'}`.replace(/\s+/g, ' ').trim().slice(0, 78);
   return { baseName, worksheetName: baseName, tableName: `${baseName} Table`.slice(0, 90) };
@@ -235,6 +237,9 @@ export function createApp(options: AppOptions) {
   app.use(rateLimit({ windowMs: ONE_MINUTE_MS, max: options.rateLimitPerMinute ?? DEFAULT_RATE_LIMIT_PER_MINUTE, now: options.now }));
   app.use(bearerAuth(options.apiKey));
 
+  // ── Sessions ─────────────────────────────────────────────────────────────
+  // Ephemeral capture of a platform view's data + context, for debug/inspection.
+
   app.post('/session', bodyLimit({ maxSize: options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES }), async (c) => {
     let body: unknown;
     try {
@@ -246,6 +251,22 @@ export function createApp(options: AppOptions) {
     const session = store.create(input);
     return c.json(summarize(session), 201, { Location: `/session/${session.id}` });
   });
+
+  app.get('/session/:id', (c) => {
+    const id = c.req.param('id');
+    if (!SESSION_ID_PATTERN.test(id)) return c.json({ error: 'not_found' }, 404);
+    const session = store.get(id);
+    if (!session) return c.json({ error: 'not_found' }, 404);
+    return c.json(session);
+  });
+
+  app.delete('/session/:id', (c) => {
+    const id = c.req.param('id');
+    if (!SESSION_ID_PATTERN.test(id) || !store.delete(id)) return c.json({ error: 'not_found' }, 404);
+    return c.body(null, 204);
+  });
+
+  // ── Provisioning & auth ──────────────────────────────────────────────────
 
   // Idempotently provision a ThoughtSpot user for a platform identity, using
   // the server-held tsadmin token. The client never sees a TS token. Body:
@@ -319,6 +340,8 @@ export function createApp(options: AppOptions) {
       return c.json({ error: 'token_failed', detail: (e as Error).message }, 502);
     }
   });
+
+  // ── TML & liveboards ─────────────────────────────────────────────────────
 
   // Turn an uploaded Tableau workbook into a Spotter-searchable worksheet.
   // Body: multipart/form-data { userid, platform, file } — or JSON
@@ -676,6 +699,8 @@ export function createApp(options: AppOptions) {
     }, liveboardId ? 201 : 200);
   });
 
+  // ── Worksheets & datasets ────────────────────────────────────────────────
+
   app.post('/worksheet', bodyLimit({ maxSize: options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES }), async (c) => {
     const ct = c.req.header('content-type') ?? '';
     let userid = '';
@@ -867,20 +892,6 @@ export function createApp(options: AppOptions) {
     const tableId = c.req.param('tableId');
     if (!/^[0-9a-f-]{16,}$/i.test(tableId)) return c.json({ error: 'invalid_request', detail: 'bad tableId' }, 400);
     await deleteTable((await adminEnv())!, tableId);
-    return c.body(null, 204);
-  });
-
-  app.get('/session/:id', (c) => {
-    const id = c.req.param('id');
-    if (!SESSION_ID_PATTERN.test(id)) return c.json({ error: 'not_found' }, 404);
-    const session = store.get(id);
-    if (!session) return c.json({ error: 'not_found' }, 404);
-    return c.json(session);
-  });
-
-  app.delete('/session/:id', (c) => {
-    const id = c.req.param('id');
-    if (!SESSION_ID_PATTERN.test(id) || !store.delete(id)) return c.json({ error: 'not_found' }, 404);
     return c.body(null, 204);
   });
 

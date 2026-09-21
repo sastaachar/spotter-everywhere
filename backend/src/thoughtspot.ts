@@ -3,6 +3,9 @@
 
 export interface TsEnv { host: string; token: string; }
 
+// ── Shared REST request helper ─────────────────────────────────────────────
+// Returns `unknown` on purpose: cluster response shapes vary by version, so
+// callers extract what they need (findGuid / findMetadataId / walks) instead.
 async function ts(env: TsEnv, path: string, body: unknown): Promise<unknown> {
   const res = await fetch(`${env.host.replace(/\/$/, '')}${path}`, {
     method: 'POST',
@@ -43,6 +46,8 @@ export interface EnsureUserOptions {
    *  (e.g. Spotter/analysis) the user needs to run search. */
   groups?: string[];
 }
+
+// ── Users & groups ─────────────────────────────────────────────────────────
 
 // A strong random password, so LOCAL_USER creation doesn't trigger an
 // activation email on IAMv2. Web Crypto — portable across Bun + Workers.
@@ -142,6 +147,8 @@ export function addUserToGroups(env: TsEnv, userId: string, groups: string[]): P
   });
 }
 
+// ── Sharing ────────────────────────────────────────────────────────────────
+
 export interface SharePrincipal { identifier: string; type: 'USER' | 'USER_GROUP'; }
 
 /** Share metadata (worksheet/table = LOGICAL_TABLE) with users/groups so they
@@ -163,6 +170,8 @@ export function shareMetadata(
     notify_on_share: false,
   });
 }
+
+// ── Auth & tokens ──────────────────────────────────────────────────────────
 
 export interface MintTokenOptions {
   validitySec?: number;
@@ -211,6 +220,8 @@ export async function mintUserToken(
   if (typeof token !== 'string') throw new Error('auth/token/full response had no token');
   return token;
 }
+
+// ── Metadata, TML & search ─────────────────────────────────────────────────
 
 /** Export an object's TML (YAML edoc). Read-only; used to learn a table's exact
  *  column identifiers before generating a worksheet on top of it. */
