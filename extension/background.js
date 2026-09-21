@@ -134,7 +134,7 @@ async function embedToken(payload) {
     const detail = body && (body.detail || body.error) ? (body.detail || body.error) : 'HTTP ' + res.status;
     return { error: 'Embed token failed: ' + detail };
   }
-  return { token: body.token };
+  return { token: body.token, host: body.host };
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

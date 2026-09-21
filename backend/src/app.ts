@@ -180,7 +180,7 @@ export function createApp(options: AppOptions) {
           console.error(`ensure groups for ${username} failed:`, (e as Error).message);
         }
       }
-      return c.json({ token, username });
+      return c.json({ token, username, host: options.tsHost });
     } catch (e) {
       return c.json({ error: 'token_failed', detail: (e as Error).message }, 502);
     }
