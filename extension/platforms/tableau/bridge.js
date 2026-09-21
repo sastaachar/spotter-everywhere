@@ -71,7 +71,28 @@
     };
   }
 
-  const HANDLERS = { summary: describe, underlying };
+  // Best-effort logged-in Tableau user (the JS API doesn't expose it directly).
+  // Probe a few Tableau Cloud globals + the account DOM; null => caller falls
+  // back to the site name.
+  function getUserInfo() {
+    const pick = (o) => o && (o.username || o.email || o.name || o.friendlyName);
+    const candidates = [
+      window.tableau && window.tableau.user,
+      window.tsConfig && window.tsConfig.user,
+      window.__vizportal__ && window.__vizportal__.user,
+      window.vizportal && window.vizportal.user,
+    ];
+    for (const c of candidates) {
+      const v = pick(c);
+      if (v) return { username: String(v) };
+    }
+    const el = document.querySelector('[aria-label*="@"], [title*="@"]');
+    const txt = el && (el.getAttribute('aria-label') || el.getAttribute('title'));
+    const m = txt && txt.match(/[\w.+-]+@[\w.-]+\.[\w.-]+/);
+    return { username: m ? m[0] : null };
+  }
+
+  const HANDLERS = { summary: describe, underlying, user: () => Promise.resolve(getUserInfo()) };
 
   window.addEventListener('message', (ev) => {
     if (ev.origin !== location.origin || !ev.data || ev.data.type !== REQUEST) return;
