@@ -82,7 +82,7 @@ async function main() {
   // Liveboard mode: the caller built/reused a liveboard and passed its id.
   if (context.liveboardId) {
     const LbEmbed = LIVEBOARDS[platform];
-    const lb = new LbEmbed('#spotter', { liveboardId: context.liveboardId });
+    const lb = new LbEmbed('#spotter', { liveboardId: context.liveboardId, frameParams: { width: '100%', height: 'calc(100vh - 40px)' } });
     lb.on('load', () => showStatus('', false));
     lb.on('error', (payload) => {
       console.error('LiveboardEmbed error', payload);
@@ -104,7 +104,10 @@ async function main() {
     showStatus('No ThoughtSpot model for this view' + (context.loadError ? ' (' + context.loadError + ')' : '') + '. Try again, or Alt+click to build one.', true);
     return;
   }
-  const viewConfig = { worksheetId };
+  // Give the SDK a definite iframe height (vh, minus the header) so its nested
+  // iframe fills the panel. A percentage height collapses to the 150px iframe
+  // default whenever the SDK's wrapper divs don't carry a resolved height.
+  const viewConfig = { worksheetId, frameParams: { width: '100%', height: 'calc(100vh - 40px)' } };
   const embed = new Embed('#spotter', viewConfig);
   embed.on('load', () => showStatus('', false));
   embed.on('error', (payload) => {

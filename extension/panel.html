@@ -6,16 +6,20 @@
   <style>
     html, body { margin: 0; height: 100%; background: #fff; font: 13px/18px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #333; }
     body { display: flex; flex-direction: column; }
-    header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #e0e0e0; }
+    header { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #e0e0e0; }
     header strong { font-size: 14px; }
     #subject { color: #666; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
     #close { all: unset; cursor: pointer; font-size: 18px; line-height: 1; color: #666; padding: 2px 6px; }
-    .status { padding: 8px 12px; color: #666; }
+    .status { flex: 0 0 auto; padding: 8px 12px; color: #666; }
     .status.error { color: #b3261e; }
-    /* Hardcoded height — the SDK's nested iframe won't inherit % or calc(vh). */
-    #spotter { height: 820px; overflow: hidden; }
-    #spotter > * { height: 820px; }
-    #spotter iframe { width: 100%; height: 820px; border: 0; display: block; }
+    /* Spotter/liveboard fills the rest of the panel. The SDK writes the iframe
+       height inline from viewConfig.frameParams (a definite vh value, see
+       panel.js), so it no longer depends on a percentage resolving through the
+       SDK's wrapper divs — the old 820px rule collapsed to the 150px iframe
+       default when that chain broke ("curled up"). We only own the width here. */
+    #spotter { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+    #spotter, #spotter > *, #spotter iframe { width: 100%; }
+    #spotter iframe { border: 0; display: block; }
   </style>
 </head>
 <body>

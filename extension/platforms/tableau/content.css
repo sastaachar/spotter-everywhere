@@ -45,6 +45,133 @@
   text-align: center;
 }
 
+/* In-page Spotter panel (src/inpage-panel.js) mounted directly in the Tableau
+   page so the embed's hostAppUrl is the Tableau host, not the extension origin.
+   The host element also carries .ts-spotter-frame (fixed, right, 100vh) above,
+   which positions it; these rules lay out its header + embed and let the embed
+   fill the height (flex child -> iframe height:100% resolves). */
+.ts-spotter-inpage {
+  display: flex;
+  flex-direction: column;
+  background: var(--ts-panel-bg, #ffffff);
+  color: var(--ts-panel-text, #1a1a1a);
+  font-family: var(--ts-panel-font, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+}
+.ts-spotter-inpage-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+  background: var(--ts-panel-surface, #f5f5f5);
+}
+.ts-spotter-inpage-head strong { font-size: 14px; font-weight: 600; }
+.ts-spotter-inpage-subject {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ts-panel-muted, #605e5c);
+  font-size: 12px;
+}
+.ts-spotter-inpage-close {
+  all: unset;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--ts-panel-muted, #605e5c);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.ts-spotter-inpage-close:hover { background: rgba(0, 0, 0, 0.06); }
+.ts-spotter-inpage-status { flex: 0 0 auto; padding: 10px 14px; color: var(--ts-panel-muted, #605e5c); }
+.ts-spotter-inpage-error { color: #a4262c; }
+.ts-spotter-embed-mount { flex: 1 1 auto; min-height: 0; }
+.ts-spotter-embed-mount iframe { width: 100%; height: 100%; border: 0; display: block; }
+
+/* Progress checklist inside the loading overlay (built in content.js). Each row
+   spins while active and shows a green check when done/reused. */
+.ts-spotter-steps {
+  width: 300px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  text-align: left;
+}
+.ts-spotter-steps-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin-bottom: 2px;
+}
+.ts-spotter-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #9aa3b2;
+  font-weight: 500;
+  transition: color 0.2s ease;
+}
+.ts-spotter-step-icon {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  box-sizing: border-box;
+  border: 2px solid #cbd2dd;
+  border-radius: 50%;
+  position: relative;
+}
+.ts-spotter-step-label { flex: 1; }
+.ts-spotter-step-detail { font-size: 12px; font-weight: 400; color: #9aa3b2; }
+
+.ts-spotter-step[data-state="active"] { color: #1a1a1a; }
+.ts-spotter-step[data-state="active"] .ts-spotter-step-icon {
+  border-color: #2f6fed;
+  border-top-color: transparent;
+  animation: ts-spotter-spin 0.7s linear infinite;
+}
+@keyframes ts-spotter-spin { to { transform: rotate(360deg); } }
+
+.ts-spotter-step[data-state="done"],
+.ts-spotter-step[data-state="skip"] { color: #1a1a1a; }
+.ts-spotter-step[data-state="done"] .ts-spotter-step-icon,
+.ts-spotter-step[data-state="skip"] .ts-spotter-step-icon {
+  background: #1a9d54;
+  border-color: #1a9d54;
+}
+.ts-spotter-step[data-state="done"] .ts-spotter-step-icon::after,
+.ts-spotter-step[data-state="skip"] .ts-spotter-step-icon::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 1px;
+  width: 4px;
+  height: 9px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.ts-spotter-step[data-state="error"] { color: #b3261e; }
+.ts-spotter-step[data-state="error"] .ts-spotter-step-icon {
+  background: #b3261e;
+  border-color: #b3261e;
+}
+.ts-spotter-step[data-state="error"] .ts-spotter-step-icon::after {
+  content: "\00d7";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  text-align: center;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+}
+
 .ts-spotter-panel {
   all: initial;
   position: fixed;

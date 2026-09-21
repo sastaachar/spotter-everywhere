@@ -9,7 +9,7 @@ import { SessionStore, ValidationError, parseSessionInput, summarize } from './s
 import { extractTwbXml, parseTableauColumns, type Column } from './tableau';
 import { parseTmdlColumns } from './powerbi';
 import { generateTml, generateWorksheetOnTable, generateLiveboardTml } from './tml';
-import { importTml, findGuid, importErrors, ensureUser, findMetadataId, mintUserToken, sanitizeUsername, shareMetadata, addUserToGroups } from './thoughtspot';
+import { importTml, findGuid, importErrors, ensureUser, findMetadataId, mintUserToken, sanitizeUsername, searchUser, shareMetadata, addUserToGroups } from './thoughtspot';
 import { rowsToCsv } from './csv';
 import { uploadCsvDataset, deleteTable } from './userdata';
 
@@ -63,6 +63,14 @@ const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-
 // and /create-liveboard agree on the reuse key without sharing any other state.
 const liveboardKey = (platform: string, guid: string): string =>
   `Spotter · ${platform} · ${guid}`.slice(0, 80);
+
+// The reuse key for a loaded dataset: (userid, platform, sheet name). /dataset
+// and /dataset/check derive the table + worksheet names from here so an
+// existence check and a build always agree on which objects to look for.
+function datasetNames(userid: string, platform: string, name: string) {
+  const baseName = `${userid} ${platform} ${name || 'data'}`.replace(/\s+/g, ' ').trim().slice(0, 78);
+  return { baseName, worksheetName: baseName, tableName: `${baseName} Table`.slice(0, 90) };
+}
 
 export function createApp(options: AppOptions) {
   const store = options.store ?? new SessionStore();
@@ -638,6 +646,48 @@ export function createApp(options: AppOptions) {
     }, 201);
   });
 
+  // Read-only existence check for a dataset's ThoughtSpot objects, so the client
+  // can show what already exists and skip rebuilding. Same reuse key as /dataset
+  // (userid, platform, name). Reports the user, the loaded table ("data model")
+  // and the worksheet; `ready` means the worksheet exists and can be embedded
+  // as-is. Body: JSON { userid, platform, name? }.
+  app.post('/dataset/check', async (c) => {
+    if (!canAdmin()) {
+      return c.json({ error: 'not_configured', detail: 'TS_HOST and TS_TOKEN must be set' }, 503);
+    }
+    let body: Record<string, string>;
+    try {
+      body = (await c.req.json()) as Record<string, string>;
+    } catch {
+      return c.json({ error: 'invalid_json' }, 400);
+    }
+    const userid = (body.userid ?? '').trim();
+    const platform = (body.platform ?? '').trim();
+    const name = (body.name ?? '').trim();
+    if (!userid || !platform) return c.json({ error: 'invalid_request', detail: 'userid and platform are required' }, 400);
+
+    const tsEnv = (await adminEnv())!;
+    const { worksheetName, tableName } = datasetNames(userid, platform, name);
+    const username = sanitizeUsername(`${options.tsUserPrefix ?? ''}${userid}`);
+
+    // All read-only lookups, in parallel; a lookup failure reads as "absent"
+    // rather than failing the whole check.
+    const [user, tableId, worksheetId] = await Promise.all([
+      searchUser(tsEnv, username).catch(() => undefined),
+      findMetadataId(tsEnv, tableName, 'LOGICAL_TABLE').catch(() => undefined),
+      findMetadataId(tsEnv, worksheetName, 'LOGICAL_TABLE').catch(() => undefined),
+    ]);
+
+    return c.json({
+      userid,
+      platform,
+      user: user ? { exists: true, username: user.name, id: user.id } : { exists: false, username },
+      table: tableId ? { exists: true, id: tableId, name: tableName } : { exists: false, name: tableName },
+      worksheet: worksheetId ? { exists: true, id: worksheetId, name: worksheetName } : { exists: false, name: worksheetName },
+      ready: Boolean(worksheetId),
+    });
+  });
+
   // Load real data ROWS into Falcon so Spotter can answer, then wrap the
   // uploaded table in a worksheet. Body (JSON): { userid, platform, name?, and
   // one of: data:{columns,rows} | csv | csvBase64 } — or multipart with a CSV
@@ -685,8 +735,7 @@ export function createApp(options: AppOptions) {
       return c.json({ error: 'invalid_request', detail: 'no data: send data.{columns,rows}, csv, csvBase64, or a CSV file' }, 400);
     }
 
-    const baseName = `${userid} ${platform} ${name || 'data'}`.replace(/\s+/g, ' ').trim().slice(0, 78);
-    const tableName = `${baseName} Table`.slice(0, 90);
+    const { worksheetName, tableName } = datasetNames(userid, platform, name);
 
     // Load the data. The USER isn't provisioned here — with JIT the user is
     // created (with groups) when their embed token is minted (POST /embed-token).
@@ -703,7 +752,6 @@ export function createApp(options: AppOptions) {
     // Best-effort: wrap the loaded table in a worksheet so Spotter has a model.
     let worksheetId: string | undefined;
     let worksheetError: string | undefined;
-    const worksheetName = baseName;
     if (dataset.loaded && dataset.columns.length && tableId) {
       try {
         // Reuse the worksheet when it already exists. Importing the TML again
