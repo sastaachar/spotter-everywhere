@@ -20,15 +20,11 @@
   const LAYOUT_EVENT = 'spotter:layout';
   const PREVIEW_ROWS = 100;
   const CREATE_SESSION = 'spotter:create-session';
+  const CREATE_DATASET = 'spotter:create-dataset';
   const PLATFORM = 'powerbi';
   const FRAME_CLASS = 'ts-spotter-frame';
   const CLOSE_EVENT = 'spotter:close';
   const EXTENSION_ORIGIN = new URL(chrome.runtime.getURL('')).origin;
-  // Backend that loads a visual's rows into ThoughtSpot and wraps them in a
-  // worksheet. Point at the local Worker (wrangler dev) or the deployed URL.
-  const BACKEND_URL = 'http://localhost:8799';
-  // Dev only. Do NOT ship a shared key in a real extension.
-  const BACKEND_API_KEY = '';
   const CANVAS_SELECTOR = '.displayAreaContainer, .displayArea';
   // Power BI's dialogs live in a cdk overlay host at z-index 10000005, and the
   // report's own visuals top out around 33000. Sit between the two so the
@@ -429,31 +425,30 @@
   // worksheet builder is the visual's own rows: POST them to /dataset, which
   // loads them into ThoughtSpot and wraps them in a worksheet Spotter can
   // answer from.
-  async function createDataset(context, result) {
-    const res = await fetch(BACKEND_URL + '/dataset', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(BACKEND_API_KEY ? { Authorization: 'Bearer ' + BACKEND_API_KEY } : {}),
-      },
-      body: JSON.stringify({
-        userid: context.workspace || 'user',
-        platform: PLATFORM,
-        name: [context.reportTitle, context.visualTitle].filter(Boolean).join(' - ') || 'Power BI visual',
-        data: {
-          columns: result.columns.map((c) => ({ name: c.name })),
-          // Raw values, not the formatted strings the table shows, or every
-          // measure loads as text.
-          rows: result.rawRows || result.rows,
+  function createDataset(context, result) {
+    // Through the service worker so extension/src/config.js stays the only
+    // place the backend URL and key are configured.
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({
+        type: CREATE_DATASET,
+        payload: {
+          userid: context.workspace || 'user',
+          platform: PLATFORM,
+          name: [context.reportTitle, context.visualTitle].filter(Boolean).join(' - ') || 'Power BI visual',
+          data: {
+            columns: result.columns.map((c) => ({ name: c.name })),
+            // Raw values, not the formatted strings the table shows, or every
+            // measure loads as text.
+            rows: result.rawRows || result.rows,
+          },
         },
-      }),
+      }, (res) => {
+        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+        if (!res) return reject(new Error('No response from the extension worker.'));
+        if (res.error) return reject(new Error(res.error));
+        resolve(res.dataset);
+      });
     });
-    const body = await res.json().catch(() => null);
-    if (!res.ok) {
-      const detail = body && (body.detail || body.error);
-      throw new Error('Worksheet build failed: ' + (detail || 'HTTP ' + res.status));
-    }
-    return body;
   }
 
   function worksheetBuilderSection(context, getResult) {
