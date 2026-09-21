@@ -203,3 +203,45 @@ describe('rate limit', () => {
     expect((await app.request('/', { headers: { 'x-real-ip': '10.0.0.2' } })).status).toBe(200);
   });
 });
+
+describe('POST /twb-to-tml', () => {
+  const TWB =
+    "<workbook><datasource caption='Sales DS'>" +
+    "<column name='[Sales]' caption='Sales' role='measure' datatype='real'/>" +
+    "<column name='[Region]' caption='Region' role='dimension' datatype='string'/>" +
+    "<column name='[:Measure Names]' role='dimension' datatype='string'/>" +
+    '</datasource></workbook>';
+  const b64 = Buffer.from(TWB).toString('base64');
+
+  function tml(app: ReturnType<typeof createApp>, body: unknown, query = '') {
+    return app.request('/twb-to-tml' + query, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(body) });
+  }
+
+  test('returns table + worksheet TML for a workbook, no cluster needed', async () => {
+    const res = await tml(makeApp(), { filename: 'Superstore.twb', fileBase64: b64 });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { name: string; columns: { name: string }[]; tml: { tableTml: string; worksheetTml: string } };
+    expect(body.name).toBe('Superstore');
+    expect(body.columns.map((c) => c.name).sort()).toEqual(['Region', 'Sales']);
+    expect(body.tml.worksheetTml).toContain('worksheet');
+    expect(body.tml.tableTml.length).toBeGreaterThan(0);
+  });
+
+  test('format=text returns concatenated YAML', async () => {
+    const res = await tml(makeApp(), { fileBase64: b64 }, '?format=text');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/yaml');
+    expect(await res.text()).toContain('---');
+  });
+
+  test('400 without a file, 422 for unparseable / empty workbook', async () => {
+    expect((await tml(makeApp(), {})).status).toBe(400);
+    const empty = Buffer.from('<workbook></workbook>').toString('base64');
+    expect((await tml(makeApp(), { fileBase64: empty })).status).toBe(422);
+  });
+
+  test('still requires the API key', async () => {
+    const res = await makeApp().request('/twb-to-tml', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    expect(res.status).toBe(401);
+  });
+});

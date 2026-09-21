@@ -153,6 +153,46 @@ export function createApp(options: AppOptions) {
   // { userid, platform, filename, fileBase64 }. Returns the worksheet the
   // extension can point Spotter at (imported GUID + searchUrl when TS is
   // configured, otherwise the generated schema + TML to import).
+  // Convert a Tableau .twb/.twbx to ThoughtSpot TML and return it — no cluster
+  // needed, no import, no user provisioned. Body: multipart with a `file`, or
+  // JSON { filename?, fileBase64 }. Returns the table + worksheet TML text.
+  app.post('/twb-to-tml', bodyLimit({ maxSize: options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES }), async (c) => {
+    const ct = c.req.header('content-type') ?? '';
+    let filename = '';
+    let bytes: Uint8Array | null = null;
+    if (ct.includes('multipart/form-data')) {
+      const form = await c.req.formData();
+      const file = form.get('file');
+      if (file && typeof file !== 'string') {
+        bytes = new Uint8Array(await file.arrayBuffer());
+        filename = file.name;
+      }
+    } else if (ct.includes('application/json')) {
+      const b = (await c.req.json().catch(() => ({}))) as Record<string, string>;
+      filename = b.filename ?? '';
+      if (b.fileBase64) bytes = Uint8Array.from(atob(b.fileBase64), (ch) => ch.charCodeAt(0));
+    }
+    if (!bytes || bytes.length === 0) {
+      return c.json({ error: 'invalid_request', detail: 'no .twb/.twbx file provided' }, 400);
+    }
+
+    let columns;
+    try {
+      columns = parseTableauColumns(extractTwbXml(bytes));
+    } catch (e) {
+      return c.json({ error: 'parse_failed', detail: (e as Error).message }, 422);
+    }
+    if (!columns.length) return c.json({ error: 'no_columns', detail: 'no fields found in the workbook' }, 422);
+
+    const name = (filename || 'workbook').replace(/\.(twbx?|tdsx?)$/i, '').slice(0, 80);
+    const tml = generateTml(name, columns);
+
+    if (c.req.query('format') === 'text') {
+      return c.text(`${tml.tableTml}\n---\n${tml.worksheetTml}\n`, 200, { 'Content-Type': 'text/yaml; charset=utf-8' });
+    }
+    return c.json({ name, columns, tml }, 200);
+  });
+
   app.post('/worksheet', bodyLimit({ maxSize: options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES }), async (c) => {
     const ct = c.req.header('content-type') ?? '';
     let userid = '';
