@@ -258,6 +258,23 @@ export function searchData(env: TsEnv, worksheetId: string, query: string, recor
 }
 
 /** Best-effort GUID extraction from a tml/import response (shape varies by version). */
+// Collect any error/validation messages from a tml/import response (shape
+// varies by version), so an ALL_OR_NONE failure reports WHY nothing imported.
+export function importErrors(result: unknown): string[] {
+  const out: string[] = [];
+  const walk = (v: unknown): void => {
+    if (!v || typeof v !== 'object') return;
+    const o = v as Record<string, unknown>;
+    for (const key of ['error_message', 'error', 'message']) {
+      const val = o[key];
+      if (typeof val === 'string' && val && !out.includes(val)) out.push(val);
+    }
+    Object.values(o).forEach(walk);
+  };
+  walk(result);
+  return out;
+}
+
 export function findGuid(result: unknown, name: string): string | undefined {
   let found: string | undefined;
   const walk = (v: unknown): void => {

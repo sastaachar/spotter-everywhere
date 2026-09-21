@@ -8,7 +8,7 @@ import { SessionStore, ValidationError, parseSessionInput, summarize } from './s
 import { extractTwbXml, parseTableauColumns, type Column } from './tableau';
 import { parseTmdlColumns } from './powerbi';
 import { generateTml, generateWorksheetOnTable, generateLiveboardTml } from './tml';
-import { importTml, findGuid, ensureUser, findMetadataId, mintUserToken, sanitizeUsername, shareMetadata, addUserToGroups } from './thoughtspot';
+import { importTml, findGuid, importErrors, ensureUser, findMetadataId, mintUserToken, sanitizeUsername, shareMetadata, addUserToGroups } from './thoughtspot';
 import { rowsToCsv } from './csv';
 import { uploadCsvDataset, deleteTable } from './userdata';
 
@@ -461,12 +461,22 @@ export function createApp(options: AppOptions) {
     if (tsEnv) {
       try {
         const result = await importTml(tsEnv, [tml.tableTml, tml.worksheetTml, liveboardTml]);
-        stage('import', 'ok');
+        const errors = importErrors(result);
         liveboardId = findGuid(result, name);
-        stage('locate', liveboardId ? 'ok' : 'failed', liveboardId ? undefined : 'imported but liveboard GUID not found');
+        if (liveboardId) {
+          stage('import', 'ok');
+          stage('locate', 'ok');
+        } else {
+          // ALL_OR_NONE: any TML that fails validation aborts the whole import.
+          const detail = errors.length ? errors.join(' | ') : 'no GUID and no error in the import response';
+          console.error('[create-liveboard] import produced no liveboard:', detail);
+          stage('import', 'failed', detail);
+          stage('locate', 'failed');
+          return c.json({ platform, name, reused: false, error: 'import_failed', detail, columns, tml, stages }, 502);
+        }
       } catch (e) {
         stage('import', 'failed', (e as Error).message);
-        return c.json({ platform, name, reused: false, columns, tml, stages }, 502);
+        return c.json({ platform, name, reused: false, error: 'cluster_error', detail: (e as Error).message, columns, tml, stages }, 502);
       }
     } else {
       stage('import', 'skipped', 'no cluster configured');
