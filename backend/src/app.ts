@@ -1,12 +1,13 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
+import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import { bearerAuth } from './auth';
 import { rateLimit } from './rate-limit';
 import { SessionStore, ValidationError, parseSessionInput, summarize } from './session';
 import { extractTwbXml, parseTableauColumns } from './tableau';
 import { generateTml, generateWorksheetOnTable } from './tml';
-import { importTml, findGuid, ensureUser, findMetadataId } from './thoughtspot';
+import { importTml, findGuid, ensureUser, findMetadataId, mintUserToken, sanitizeUsername, shareMetadata } from './thoughtspot';
 import { rowsToCsv } from './csv';
 import { uploadCsvDataset, deleteTable } from './userdata';
 
@@ -26,6 +27,26 @@ export interface AppOptions {
   tsAccountType?: string;
   /** Domain for synthesized provisioned-user emails (default spotter.local). */
   tsEmailDomain?: string;
+  /** Trusted-auth secret key — mints embed tokens AS the provisioned user. */
+  tsSecretKey?: string;
+  /** Groups (GUIDs/names) provisioned users join — carry the Spotter/search
+   *  privileges. Without a privileged group, the user gets "no permission". */
+  tsUserGroups?: string[];
+  /** Exact origins allowed via CORS (the extension calls cross-origin). When
+   *  unset, Tableau Cloud (*.online.tableau.com) and localhost are allowed. */
+  allowedOrigins?: string[];
+}
+
+// Reflect only allowed origins (never a literal "*"): the configured list, or
+// Tableau Cloud + localhost by default. Returns the origin to allow, or null.
+function makeOriginCheck(allowed?: string[]) {
+  return (origin: string): string | null => {
+    if (!origin) return origin;
+    if (allowed && allowed.length) return allowed.includes(origin) ? origin : null;
+    if (/^https:\/\/[a-z0-9-]+\.online\.tableau\.com$/i.test(origin)) return origin;
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return origin;
+    return null;
+  };
 }
 
 export const DEFAULT_MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -38,6 +59,14 @@ export function createApp(options: AppOptions) {
   const app = new Hono();
 
   app.use(secureHeaders());
+  // CORS before auth/rate-limit so the browser's preflight (OPTIONS, no auth
+  // header) is answered directly instead of 401/429'd.
+  app.use(cors({
+    origin: makeOriginCheck(options.allowedOrigins),
+    allowHeaders: ['Authorization', 'Content-Type'],
+    allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+    maxAge: 600,
+  }));
   app.use(async (c, next) => {
     await next();
     c.header('Cache-Control', 'no-store');
@@ -78,10 +107,45 @@ export function createApp(options: AppOptions) {
       { host: options.tsHost, token: options.tsToken },
       {
         userid, platform, prefix: options.tsUserPrefix, accountType: options.tsAccountType,
-        emailDomain: options.tsEmailDomain, email: body.email,
+        emailDomain: options.tsEmailDomain, email: body.email, groups: options.tsUserGroups,
       },
     );
     return c.json({ userid, platform, user }, user.created ? 201 : 200);
+  });
+
+  // Mint a cookieless login token FOR the provisioned user (not the admin), so
+  // the embed runs as them. Uses the trusted-auth secret key held server-side.
+  // Body: JSON { userid, platform }. 503 if no secret key is configured (the
+  // extension then falls back to the admin embed).
+  app.post('/embed-token', async (c) => {
+    if (!options.tsHost) return c.json({ error: 'not_configured', detail: 'TS_HOST not set' }, 503);
+    if (!options.tsSecretKey) {
+      return c.json({ error: 'not_configured', detail: 'TS_SECRET_KEY not set — enable trusted auth and set its secret key' }, 503);
+    }
+    let body: Record<string, string>;
+    try {
+      body = (await c.req.json()) as Record<string, string>;
+    } catch {
+      return c.json({ error: 'invalid_json' }, 400);
+    }
+    const userid = (body.userid ?? '').trim();
+    const platform = (body.platform ?? 'tableau').trim();
+    if (!userid) return c.json({ error: 'invalid_request', detail: 'userid is required' }, 400);
+    const username = sanitizeUsername(`${options.tsUserPrefix ?? ''}${userid}`);
+    const email = `${username}@${options.tsEmailDomain ?? 'thoughtspot.com'}`;
+    try {
+      // JIT: create the user (if absent) with the privileged groups AND mint the
+      // token, in one call — provisioning happens at embed time.
+      const token = await mintUserToken(options.tsHost, username, options.tsSecretKey, {
+        autoCreate: true,
+        groups: options.tsUserGroups,
+        email,
+        displayName: `${userid} (${platform})`,
+      });
+      return c.json({ token, username });
+    } catch (e) {
+      return c.json({ error: 'token_failed', detail: (e as Error).message }, 502);
+    }
   });
 
   // Turn an uploaded Tableau workbook into a Spotter-searchable worksheet.
@@ -135,7 +199,7 @@ export function createApp(options: AppOptions) {
       // Provision the user first, then import the worksheet (both as tsadmin).
       user = await ensureUser(tsEnv, {
         userid, platform, prefix: options.tsUserPrefix, accountType: options.tsAccountType,
-        emailDomain: options.tsEmailDomain,
+        emailDomain: options.tsEmailDomain, groups: options.tsUserGroups,
       });
       const result = await importTml(tsEnv, [tml.tableTml, tml.worksheetTml]);
       worksheetId = findGuid(result, name);
@@ -201,16 +265,20 @@ export function createApp(options: AppOptions) {
       return c.json({ error: 'invalid_request', detail: 'no data: send data.{columns,rows}, csv, csvBase64, or a CSV file' }, 400);
     }
 
-    const user = await ensureUser(tsEnv, {
-      userid, platform, prefix: options.tsUserPrefix, accountType: options.tsAccountType,
-      emailDomain: options.tsEmailDomain,
-    });
-
     const baseName = `${userid} ${platform} ${name || 'data'}`.replace(/\s+/g, ' ').trim().slice(0, 78);
     const tableName = `${baseName} Table`.slice(0, 90);
 
-    const dataset = await uploadCsvDataset(tsEnv, csv, tableName);
-    const tableId = dataset.tableId ?? (await findMetadataId(tsEnv, tableName));
+    // Load the data. The USER isn't provisioned here — with JIT the user is
+    // created (with groups) when their embed token is minted (POST /embed-token).
+    // We just load + share with the group so any JIT member can search it.
+    let dataset;
+    let tableId: string | undefined;
+    try {
+      dataset = await uploadCsvDataset(tsEnv, csv, tableName);
+      tableId = dataset.tableId ?? (await findMetadataId(tsEnv, tableName));
+    } catch (e) {
+      return c.json({ error: 'data_load_failed', detail: (e as Error).message }, 502);
+    }
 
     // Best-effort: wrap the loaded table in a worksheet so Spotter has a model.
     let worksheetId: string | undefined;
@@ -228,19 +296,33 @@ export function createApp(options: AppOptions) {
       }
     }
 
+    // Share the worksheet + table with the privileged group so every JIT member
+    // can search it (tsadmin owns the imported objects). Best-effort.
+    let shareError: string | undefined;
+    const groups = options.tsUserGroups ?? [];
+    const ids = [worksheetId, tableId].filter((x): x is string => Boolean(x));
+    if (ids.length && groups.length) {
+      try {
+        await shareMetadata(tsEnv, ids, groups.map((g) => ({ identifier: g, type: 'USER_GROUP' as const })), 'READ_ONLY');
+      } catch (e) {
+        shareError = (e as Error).message;
+        console.error('share with group failed:', shareError);
+      }
+    }
+
     const dataSources = worksheetId ? [worksheetId] : tableId ? [tableId] : [];
     const searchUrl = tableId ? `${options.tsHost.replace(/\/$/, '')}/#/data/tables/${tableId}` : undefined;
 
     return c.json({
       userid,
       platform,
-      user,
       dataset: {
         tableId,
         tableName,
         worksheetId,
         worksheetName: worksheetId ? worksheetName : undefined,
         worksheetError,
+        shareError,
         columns: dataset.columns,
         loaded: dataset.loaded,
         loadMessages: dataset.errors,

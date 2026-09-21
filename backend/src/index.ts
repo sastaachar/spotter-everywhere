@@ -16,6 +16,9 @@ const app = createApp({
   tsUserPrefix: Bun.env.TS_USER_PREFIX,
   tsAccountType: Bun.env.TS_ACCOUNT_TYPE,
   tsEmailDomain: Bun.env.TS_EMAIL_DOMAIN,
+  tsSecretKey: Bun.env.TS_SECRET_KEY,
+  tsUserGroups: Bun.env.TS_USER_GROUPS?.split(',').map((s) => s.trim()).filter(Boolean),
+  allowedOrigins: Bun.env.ALLOWED_ORIGINS?.split(',').map((s) => s.trim()).filter(Boolean),
 });
 
 export default { port, fetch: app.fetch };

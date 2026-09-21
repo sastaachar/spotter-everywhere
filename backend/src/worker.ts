@@ -9,6 +9,9 @@ interface WorkerEnv {
   TS_USER_PREFIX?: string;
   TS_ACCOUNT_TYPE?: string;
   TS_EMAIL_DOMAIN?: string;
+  TS_SECRET_KEY?: string;
+  TS_USER_GROUPS?: string;
+  ALLOWED_ORIGINS?: string;
 }
 
 let app: ReturnType<typeof createApp> | undefined;
@@ -27,6 +30,9 @@ export default {
       tsUserPrefix: env.TS_USER_PREFIX,
       tsAccountType: env.TS_ACCOUNT_TYPE,
       tsEmailDomain: env.TS_EMAIL_DOMAIN,
+      tsSecretKey: env.TS_SECRET_KEY,
+      tsUserGroups: env.TS_USER_GROUPS?.split(',').map((s) => s.trim()).filter(Boolean),
+      allowedOrigins: env.ALLOWED_ORIGINS?.split(',').map((s) => s.trim()).filter(Boolean),
     });
     return app.fetch(req, env as Record<string, unknown>, ctx as never);
   },

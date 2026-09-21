@@ -39,6 +39,9 @@ export interface EnsureUserOptions {
   email?: string;
   /** Domain for the synthesized email when `email` is absent. */
   emailDomain?: string;
+  /** Groups (GUIDs or names) to add the user to — these carry the privileges
+   *  (e.g. Spotter/analysis) the user needs to run search. */
+  groups?: string[];
 }
 
 // A strong random password, so LOCAL_USER creation doesn't trigger an
@@ -79,36 +82,130 @@ async function searchUser(env: TsEnv, username: string): Promise<TsUser | undefi
  */
 export async function ensureUser(env: TsEnv, opts: EnsureUserOptions): Promise<EnsuredUser> {
   const username = sanitizeUsername(`${opts.prefix ?? ''}${opts.userid}`);
-  const existing = await searchUser(env, username);
-  if (existing) return { ...existing, created: false };
+  const groups = opts.groups?.filter(Boolean) ?? [];
 
-  const displayName = `${opts.userid} (${opts.platform})`.slice(0, 128);
-  // This cluster's create-user mutation requires an email (String!), so always
-  // send one — the caller's if known, else a deterministic synthetic address.
-  // The cluster enforces an email-domain allowlist (error 12714,
-  // NON_WHITE_LISTED_DOMAIN). Default to the cluster's own domain; override with
-  // TS_EMAIL_DOMAIN, or add a domain to the allowlist via tscli.
-  const email = opts.email || `${username}@${opts.emailDomain ?? 'thoughtspot.com'}`;
-  try {
-    const created = (await ts(env, '/api/rest/2.0/users/create', {
-      name: username,
-      display_name: displayName,
-      password: randomPassword(),
-      account_type: opts.accountType ?? 'LOCAL_USER',
-      email,
-    })) as Record<string, unknown>;
-    return {
-      id: String(created.id),
-      name: String(created.name),
-      display_name: created.display_name as string | undefined,
-      created: true,
-    };
-  } catch (e) {
-    // Lost a create race, or the name already existed — re-search and reuse.
-    const again = await searchUser(env, username);
-    if (again) return { ...again, created: false };
-    throw e;
+  let user: EnsuredUser;
+  const existing = await searchUser(env, username);
+  if (existing) {
+    user = { ...existing, created: false };
+  } else {
+    const displayName = `${opts.userid} (${opts.platform})`.slice(0, 128);
+    // This cluster's create-user mutation requires an email (String!), so always
+    // send one — the caller's if known, else a deterministic synthetic address.
+    // The cluster enforces an email-domain allowlist (error 12714,
+    // NON_WHITE_LISTED_DOMAIN). Default to the cluster's own domain; override
+    // with TS_EMAIL_DOMAIN, or add a domain to the allowlist via tscli.
+    const email = opts.email || `${username}@${opts.emailDomain ?? 'thoughtspot.com'}`;
+    try {
+      const created = (await ts(env, '/api/rest/2.0/users/create', {
+        name: username,
+        display_name: displayName,
+        password: randomPassword(),
+        account_type: opts.accountType ?? 'LOCAL_USER',
+        email,
+        ...(groups.length ? { group_identifiers: groups } : {}),
+      })) as Record<string, unknown>;
+      user = {
+        id: String(created.id),
+        name: String(created.name),
+        display_name: created.display_name as string | undefined,
+        created: true,
+      };
+    } catch (e) {
+      // Lost a create race, or the name already existed — re-search and reuse.
+      const again = await searchUser(env, username);
+      if (!again) throw e;
+      user = { ...again, created: false };
+    }
   }
+
+  // Ensure group membership (idempotent ADD) so the user has the privileges to
+  // use search/Spotter — needed for existing users too, and for new users whose
+  // create didn't take the groups. Best-effort: don't fail provisioning on it.
+  if (groups.length) {
+    try {
+      await addUserToGroups(env, user.id, groups);
+    } catch (e) {
+      console.error(`addUserToGroups(${user.name}) failed:`, (e as Error).message);
+    }
+  }
+  return user;
+}
+
+/** Add a user to groups (idempotent). Groups carry the privileges (e.g. the
+ *  Spotter/analysis privilege) the user needs to actually run search. */
+export function addUserToGroups(env: TsEnv, userId: string, groups: string[]): Promise<unknown> {
+  return ts(env, `/api/rest/2.0/users/${encodeURIComponent(userId)}/update`, {
+    group_identifiers: groups,
+    operation: 'ADD',
+  });
+}
+
+export interface SharePrincipal { identifier: string; type: 'USER' | 'USER_GROUP'; }
+
+/** Share metadata (worksheet/table = LOGICAL_TABLE) with users/groups so they
+ *  can see and search it. tsadmin owns the imported objects; sharing with the
+ *  group means every JIT-provisioned member gets access without a per-user call. */
+export function shareMetadata(
+  env: TsEnv,
+  metadataIds: string[],
+  principals: SharePrincipal[],
+  shareMode: 'READ_ONLY' | 'MODIFY' = 'READ_ONLY',
+  metadataType = 'LOGICAL_TABLE',
+): Promise<unknown> {
+  return ts(env, '/api/rest/2.0/security/metadata/share', {
+    metadata_type: metadataType,
+    metadata_identifiers: metadataIds,
+    permissions: principals.map((principal) => ({ principal, share_mode: shareMode })),
+  });
+}
+
+export interface MintTokenOptions {
+  validitySec?: number;
+  /** JIT-provision the user if absent (created with the groups below). */
+  autoCreate?: boolean;
+  /** Groups the JIT-created user joins — carry the Spotter/search privileges. */
+  groups?: string[];
+  email?: string;
+  displayName?: string;
+}
+
+/**
+ * Mint a cookieless login token FOR a given user via trusted auth (secret_key),
+ * without their password — this is how the embed runs *as that user* instead of
+ * as the admin. With `autoCreate`, /auth/token/full also JIT-provisions the user
+ * (with `group_identifiers`) in the same call — create + assign groups + mint,
+ * at embed time. Requires trusted authentication enabled on the cluster
+ * (Develop → Security → Trusted authentication) and its secret key.
+ */
+export async function mintUserToken(
+  host: string,
+  username: string,
+  secretKey: string,
+  opts: MintTokenOptions = {},
+): Promise<string> {
+  const body: Record<string, unknown> = {
+    username,
+    secret_key: secretKey,
+    validity_time_in_sec: opts.validitySec ?? 300,
+  };
+  if (opts.autoCreate) body.auto_create = true;
+  if (opts.groups?.length) body.group_identifiers = opts.groups;
+  if (opts.email) body.email = opts.email;
+  if (opts.displayName) body.display_name = opts.displayName;
+
+  const res = await fetch(`${host.replace(/\/$/, '')}/api/rest/2.0/auth/token/full`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`auth/token/full -> HTTP ${res.status}: ${text.slice(0, 300)}`);
+  let json: unknown;
+  try { json = JSON.parse(text); } catch { throw new Error('auth/token/full returned non-JSON'); }
+  const token = (json as Record<string, unknown>)?.token;
+  if (typeof token !== 'string') throw new Error('auth/token/full response had no token');
+  return token;
 }
 
 /** Export an object's TML (YAML edoc). Read-only; used to learn a table's exact

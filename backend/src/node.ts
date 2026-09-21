@@ -45,6 +45,9 @@ const app = createApp({
   tsUserPrefix: process.env.TS_USER_PREFIX,
   tsAccountType: process.env.TS_ACCOUNT_TYPE,
   tsEmailDomain: process.env.TS_EMAIL_DOMAIN,
+  tsSecretKey: process.env.TS_SECRET_KEY,
+  tsUserGroups: process.env.TS_USER_GROUPS?.split(',').map((s) => s.trim()).filter(Boolean),
+  allowedOrigins: process.env.ALLOWED_ORIGINS?.split(',').map((s) => s.trim()).filter(Boolean),
 });
 
 serve({ fetch: app.fetch, port }, (info) => {
