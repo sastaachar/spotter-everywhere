@@ -91,6 +91,30 @@ export function createApp(options: AppOptions) {
     return { host: options.tsHost, token: adminCache.token };
   }
 
+  // Load rows into a real Falcon table (same CSV pipeline as /dataset) and wrap
+  // a worksheet on it, so a liveboard built on top has actual data. Idempotent:
+  // reuses an existing worksheet of the same name. Returns the worksheet name.
+  async function loadDataset(env: { host: string; token: string }, wsName: string, columns: { name: string }[], rows: unknown[][]) {
+    const tableName = `${wsName} Table`.slice(0, 90);
+    const dataset = await uploadCsvDataset(env, rowsToCsv(columns, rows), tableName);
+    const tableId = dataset.tableId ?? (await findMetadataId(env, tableName));
+    let worksheetId = await findMetadataId(env, wsName, 'LOGICAL_TABLE');
+    if (!worksheetId && dataset.loaded && dataset.columns.length && tableId) {
+      const imp = await importTml(env, [generateWorksheetOnTable(wsName, tableName, dataset.columns)]);
+      worksheetId = findGuid(imp, wsName) ?? (await findMetadataId(env, wsName, 'LOGICAL_TABLE'));
+    }
+    const groups = options.tsUserGroups ?? [];
+    const ids = [worksheetId, tableId].filter((x): x is string => Boolean(x));
+    if (ids.length && groups.length) {
+      try {
+        await shareMetadata(env, ids, groups.map((g) => ({ identifier: g, type: 'USER_GROUP' as const })), 'READ_ONLY');
+      } catch (e) {
+        console.error('[loadDataset] share failed:', (e as Error).message);
+      }
+    }
+    return { tableId, worksheetId, worksheetName: wsName, loaded: dataset.loaded, messages: dataset.errors };
+  }
+
   app.use(logger()); // per-request access log: method, path, status, timing
   app.use(secureHeaders());
   // CORS before auth/rate-limit so the browser's preflight (OPTIONS, no auth
@@ -375,6 +399,7 @@ export function createApp(options: AppOptions) {
     let filename = '';
     let bytes: Uint8Array | null = null;
     let text = '';
+    let dataInput: { columns: { name: string; type?: string; dataType?: string }[]; rows: unknown[][] } | null = null;
     if (ct.includes('multipart/form-data')) {
       const form = await c.req.formData();
       platform = String(form.get('platform') ?? '');
@@ -388,13 +413,15 @@ export function createApp(options: AppOptions) {
         filename = file.name;
       }
     } else if (ct.includes('application/json')) {
-      const b = (await c.req.json().catch(() => ({}))) as Record<string, string>;
-      platform = b.platform ?? '';
-      name = b.name ?? '';
-      guid = b.guid ?? '';
-      filename = b.filename ?? '';
-      text = b.model ?? '';
-      if (b.fileBase64) bytes = Uint8Array.from(atob(b.fileBase64), (ch) => ch.charCodeAt(0));
+      const b = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+      platform = String(b.platform ?? '');
+      name = String(b.name ?? '');
+      guid = String(b.guid ?? '');
+      filename = String(b.filename ?? '');
+      text = String(b.model ?? '');
+      if (typeof b.fileBase64 === 'string') bytes = Uint8Array.from(atob(b.fileBase64), (ch) => ch.charCodeAt(0));
+      const d = b.data as { columns?: { name: string; type?: string; dataType?: string }[]; rows?: unknown[][] } | undefined;
+      if (d && Array.isArray(d.columns) && Array.isArray(d.rows)) dataInput = { columns: d.columns, rows: d.rows };
     }
 
     platform = platform.toLowerCase();
@@ -433,33 +460,86 @@ export function createApp(options: AppOptions) {
       stage('lookup', 'skipped', 'no cluster configured');
     }
 
-    // 2. parse — model -> columns.
-    const model: Uint8Array | string | null = conv.binary ? bytes : text || (bytes ? new TextDecoder().decode(bytes) : '');
-    if (!model || (conv.binary ? (model as Uint8Array).length === 0 : String(model).length === 0)) {
-      stage('parse', 'failed', `no ${conv.modeling} model provided for ${platform}`);
-      return c.json({ platform, name, reused: false, stages }, 400);
-    }
+    // 2. parse/collect columns — from posted data (preferred: has rows) or the model.
     let columns: Column[];
-    try {
-      columns = conv.parse(model);
-    } catch (e) {
-      stage('parse', 'failed', (e as Error).message);
-      return c.json({ platform, name, reused: false, stages }, 422);
+    let rows: unknown[][] | null = null;
+    if (dataInput) {
+      columns = dataInput.columns
+        .filter((c) => c && c.name)
+        .map((c, i) => ({
+          id: c.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || `col_${i}`,
+          name: c.name,
+          type: c.type === 'MEASURE' ? 'MEASURE' : 'ATTRIBUTE',
+          dataType: (c.dataType as Column['dataType']) || 'VARCHAR',
+        }));
+      rows = dataInput.rows;
+      if (!columns.length) {
+        stage('parse', 'failed', 'data.columns was empty');
+        return c.json({ platform, name, reused: false, stages }, 422);
+      }
+      stage('parse', 'ok', `${columns.length} columns, ${rows.length} rows (from data)`);
+    } else {
+      const model: Uint8Array | string | null = conv.binary ? bytes : text || (bytes ? new TextDecoder().decode(bytes) : '');
+      if (!model || (conv.binary ? (model as Uint8Array).length === 0 : String(model).length === 0)) {
+        stage('parse', 'failed', `no ${conv.modeling} model or data provided for ${platform}`);
+        return c.json({ platform, name, reused: false, stages }, 400);
+      }
+      try {
+        columns = conv.parse(model);
+      } catch (e) {
+        stage('parse', 'failed', (e as Error).message);
+        return c.json({ platform, name, reused: false, stages }, 422);
+      }
+      if (!columns.length) {
+        stage('parse', 'failed', 'no fields found in the model');
+        return c.json({ platform, name, reused: false, stages }, 422);
+      }
+      stage('parse', 'ok', `${columns.length} columns (schema only, no data)`);
     }
-    if (!columns.length) {
-      stage('parse', 'failed', 'no fields found in the model');
-      return c.json({ platform, name, reused: false, stages }, 422);
-    }
-    stage('parse', 'ok', `${columns.length} columns`);
 
-    // 3. generate — TML.
+    let liveboardId: string | undefined;
+
+    // Data path: load real rows via the CSV pipeline, then build the liveboard
+    // on that populated worksheet.
+    if (rows && tsEnv) {
+      let ws;
+      try {
+        ws = await loadDataset(tsEnv, name + ' Data', columns, rows);
+        stage('load-data', ws.loaded ? 'ok' : 'failed', ws.worksheetId ? `worksheet ${ws.worksheetId}` : (ws.messages || []).join('; '));
+      } catch (e) {
+        stage('load-data', 'failed', (e as Error).message);
+        return c.json({ platform, name, reused: false, error: 'data_load_failed', detail: (e as Error).message, stages }, 502);
+      }
+      if (!ws.worksheetId) {
+        return c.json({ platform, name, reused: false, error: 'data_load_failed', detail: 'no worksheet after load', stages }, 502);
+      }
+      const liveboardTml = generateLiveboardTml(name, ws.worksheetName, columns);
+      stage('generate', 'ok');
+      try {
+        const result = await importTml(tsEnv, [liveboardTml]);
+        liveboardId = findGuid(result, name);
+        if (!liveboardId) {
+          const detail = importErrors(result).join(' | ') || 'no liveboard GUID in the import response';
+          console.error('[create-liveboard] liveboard import produced no GUID:', detail);
+          stage('import', 'failed', detail);
+          return c.json({ platform, name, reused: false, error: 'import_failed', detail, stages }, 502);
+        }
+        stage('import', 'ok');
+        stage('locate', 'ok');
+      } catch (e) {
+        stage('import', 'failed', (e as Error).message);
+        return c.json({ platform, name, reused: false, error: 'cluster_error', detail: (e as Error).message, stages }, 502);
+      }
+      return c.json({ platform, name, reused: false, worksheetId: ws.worksheetId, liveboardId, liveboardUrl: pinboardUrl(liveboardId), stages }, 201);
+    }
+
+    // 3. generate — schema-only TML (no data).
     const base = generateTml(name, columns);
     const liveboardTml = generateLiveboardTml(name, base.worksheetName, columns);
     const tml = { ...base, liveboardTml };
     stage('generate', 'ok');
 
     // 4/5. import + locate.
-    let liveboardId: string | undefined;
     if (tsEnv) {
       try {
         const result = await importTml(tsEnv, [tml.tableTml, tml.worksheetTml, liveboardTml]);
