@@ -34,17 +34,17 @@
 
 .ts-spotter-frame {
   all: initial;
-  position: fixed;
-  top: 0;
-  right: 0;
-  width: 760px;
-  max-width: 90vw;
-  height: 100vh;
-  border: 0;
-  border-left: 1px solid #e0e0e0;
-  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.08);
-  background: #ffffff;
-  z-index: 2147483647;
+}
+
+.ts-spotter-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
+  font: 500 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: #2c3e50;
+  text-align: center;
 }
 
 .ts-spotter-panel {
@@ -170,3 +170,39 @@
   overflow-wrap: anywhere;
 }
 
+
+/* In-page Spotter panel (src/inpage-panel.js). Colours come from
+   ui/configs/power-bi-config.js via inline custom properties, so the panel
+   chrome matches the Power BI palette the embed itself is themed with. */
+.ts-spotter-inpage {
+  position: fixed; top: 0; right: 0; width: 760px; max-width: 95vw; height: 100vh;
+  display: flex; flex-direction: column; box-sizing: border-box;
+  background: var(--ts-panel-bg, #fff);
+  color: var(--ts-panel-text, #252423);
+  border-left: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.10);
+  z-index: 2147483647;
+  font: 13px/18px var(--ts-panel-font, "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif);
+}
+.ts-spotter-inpage-head {
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  background: var(--ts-panel-surface, #f3f2f1);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  /* Power BI's yellow reads as the product accent without shouting. */
+  box-shadow: inset 0 3px 0 0 var(--ts-panel-accent, #f2c811);
+  flex: 0 0 auto;
+}
+.ts-spotter-inpage-head strong { font-size: 14px; font-weight: 600; }
+.ts-spotter-inpage-subject {
+  color: var(--ts-panel-muted, #605e5c);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+}
+.ts-spotter-inpage-close {
+  all: unset; cursor: pointer; font-size: 18px; line-height: 1;
+  color: var(--ts-panel-muted, #605e5c); padding: 2px 8px; border-radius: 2px;
+}
+.ts-spotter-inpage-close:hover { background: rgba(0, 0, 0, 0.06); }
+.ts-spotter-inpage-status { padding: 10px 14px; color: var(--ts-panel-muted, #605e5c); flex: 0 0 auto; }
+.ts-spotter-inpage-error { color: #a4262c; }
+.ts-spotter-embed-mount { flex: 1 1 auto; min-height: 0; }
+.ts-spotter-embed-mount iframe { width: 100%; height: 100%; border: 0; display: block; }

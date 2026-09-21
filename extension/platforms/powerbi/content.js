@@ -19,12 +19,11 @@
   const RESPONSE_EVENT = 'spotter:response';
   const LAYOUT_EVENT = 'spotter:layout';
   const PREVIEW_ROWS = 100;
+  const MAX_LOAD_ROWS = 20000;
   const CREATE_SESSION = 'spotter:create-session';
   const CREATE_DATASET = 'spotter:create-dataset';
   const PLATFORM = 'powerbi';
   const FRAME_CLASS = 'ts-spotter-frame';
-  const CLOSE_EVENT = 'spotter:close';
-  const EXTENSION_ORIGIN = new URL(chrome.runtime.getURL('')).origin;
   const CANVAS_SELECTOR = '.displayAreaContainer, .displayArea';
   // Power BI's dialogs live in a cdk overlay host at z-index 10000005, and the
   // report's own visuals top out around 33000. Sit between the two so the
@@ -542,21 +541,53 @@
   function closePanel() {
     document.querySelectorAll('.' + PANEL_CLASS).forEach((el) => el.remove());
     document.querySelectorAll('.' + FRAME_CLASS).forEach((el) => el.remove());
+    if (window.__spotterPanel) window.__spotterPanel.close();
   }
 
-  function openSpotter(context) {
+  // Same pipeline as Tableau's openSpotter: read this visual's rows -> load them
+  // into ThoughtSpot and build a worksheet -> mount Spotter on THAT worksheet,
+  // authenticated as the same user it was shared with. A plain click does the
+  // whole thing; the details panel's button is the manual equivalent.
+  async function openSpotter(context) {
     closePanel();
-    const frame = document.createElement('iframe');
-    frame.className = FRAME_CLASS;
-    frame.title = 'Spotter';
-    frame.src = chrome.runtime.getURL('panel.html') + '#' + encodeURIComponent(JSON.stringify({ ...context, platform: PLATFORM }));
-    document.body.appendChild(frame);
+    const loading = document.createElement('aside');
+    loading.className = FRAME_CLASS + ' ts-spotter-loading';
+    loading.textContent = 'Loading this visual into Spotter\u2026';
+    document.body.appendChild(loading);
     document.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: context }));
-  }
 
-  addEventListener('message', (ev) => {
-    if (ev.origin === EXTENSION_ORIGIN && ev.data && ev.data.type === CLOSE_EVENT) closePanel();
-  });
+    // Mounted in this page, not in panel.html: the SDK derives hostAppUrl from
+    // window.location.host, and from the extension origin the cluster 401s
+    // every embed call so Spotter never starts a conversation.
+    const openPanelFrame = (extra) => {
+      loading.remove();
+      const panel = window.__spotterPanel;
+      if (!panel) {
+        console.error('[Power BI Spotter] dist/inpage-panel.js did not load — run `npm run build` in extension/.');
+        return;
+      }
+      panel.open({ ...context, platform: PLATFORM, ...extra }, FRAME_CLASS);
+    };
+
+    const userid = context.workspace || 'powerbi_user';
+    try {
+      // Already built (details panel route) — just embed it.
+      if (context.worksheetId) return openPanelFrame({ userid, workspace: userid });
+      if (!context.visualId) throw new Error('no visual id for this view');
+      loading.textContent = 'Loading \u201c' + (context.visualTitle || 'this visual') + '\u201d into ThoughtSpot\u2026';
+      const result = await requestData(context.visualId, 'summary', MAX_LOAD_ROWS);
+      const body = await createDataset(context, result);
+      const worksheetId = (body.embed && body.embed.worksheetId)
+        || (body.dataset && (body.dataset.worksheetId || body.dataset.tableId));
+      const worksheetName = body.dataset && (body.dataset.worksheetName || body.dataset.tableName);
+      // workspace is the userid the embed authenticates as — keep it equal to
+      // the one /dataset provisioned and shared for, or the model is invisible
+      // and Spotter sits on a disabled send button.
+      openPanelFrame({ worksheetId, worksheetName, userid, workspace: userid });
+    } catch (err) {
+      openPanelFrame({ userid, workspace: userid, loadError: err.message });
+    }
+  }
 
   // Selectors are the part most likely to drift on a Power BI release, so
   // report what was actually on the page when nothing matched.

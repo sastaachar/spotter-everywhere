@@ -58,6 +58,7 @@
         "https://app.powerbi.com/*"
       ],
       "js": [
+        "dist/inpage-panel.js",
         "platforms/powerbi/content.js"
       ],
       "css": [
