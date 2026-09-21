@@ -14,4 +14,5 @@ exec "$BIN" \
   --load-extension="$HERE" \
   --remote-debugging-port="$PORT" \
   --no-first-run --no-default-browser-check \
+  --ignore-certificate-errors \
   "${@:-https://prod-in-a.online.tableau.com/}"

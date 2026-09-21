@@ -5,3 +5,4 @@ coverage/
 .dev.vars
 .wrangler/
 package-lock.json
+cluster-ca.pem
