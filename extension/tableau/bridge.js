@@ -58,12 +58,28 @@
     };
   }
 
+  // JS API v2 stops at 10,000 rows; getTotalRowCount reports the cap, not the table size.
+  async function underlying(name) {
+    const found = findWorksheet(name);
+    if (!found) throw new Error('Worksheet not found in the active dashboard: ' + name);
+    const data = await found.ws.getUnderlyingDataAsync({ ignoreSelection: true, includeAllColumns: true });
+    return {
+      worksheet: found.ws.getName(),
+      columns: data.getColumns().map((c) => ({ name: c.getFieldName(), type: c.getDataType() })),
+      totalRows: data.getTotalRowCount(),
+      rows: data.getData().map((r) => r.map((c) => c.formattedValue)),
+    };
+  }
+
+  const HANDLERS = { summary: describe, underlying };
+
   window.addEventListener('message', (ev) => {
     if (ev.origin !== location.origin || !ev.data || ev.data.type !== REQUEST) return;
-    const { requestId, worksheet } = ev.data;
+    const { requestId, worksheet, kind } = ev.data;
     const reply = (payload) =>
       ev.source && ev.source.postMessage({ type: RESPONSE, requestId, ...payload }, ev.origin);
-    describe(worksheet).then(
+    const handler = HANDLERS[kind] || describe;
+    handler(worksheet).then(
       (result) => reply({ result }),
       (err) => reply({ error: String((err && err.message) || err) })
     );

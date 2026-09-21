@@ -16,7 +16,9 @@
   const SCAN_DEBOUNCE_MS = 100;
   const REQUEST_EVENT = 'spotter:request';
   const RESPONSE_EVENT = 'spotter:response';
-  const REQUEST_TIMEOUT_MS = 15000;
+  const REQUEST_TIMEOUT_MS = 30000;
+  const UNDERLYING_CAP = 10000;
+  const UNDERLYING_CHUNK = 500;
 
   const SPARKLE_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true">' +
@@ -124,7 +126,7 @@
     else pending.resolve(ev.data.result);
   });
 
-  function requestWorksheetData(worksheet) {
+  function requestWorksheetData(worksheet, kind) {
     if (window.parent === window) {
       return Promise.reject(new Error('Not inside the Tableau portal page; data bridge unavailable.'));
     }
@@ -135,7 +137,7 @@
         reject(new Error('Timed out waiting for the data bridge.'));
       }, REQUEST_TIMEOUT_MS);
       pendingRequests.set(requestId, { resolve, reject, timer });
-      window.parent.postMessage({ type: REQUEST_EVENT, requestId, worksheet }, location.origin);
+      window.parent.postMessage({ type: REQUEST_EVENT, requestId, worksheet, kind }, location.origin);
     });
   }
 
@@ -164,22 +166,72 @@
     return dl;
   }
 
-  function buildTable(data) {
+  function appendRows(tbody, rows, from, to) {
+    for (let i = from; i < to; i++) {
+      const tr = el('tr');
+      tr.appendChild(el('td', 'ts-spotter-rownum', String(i + 1)));
+      rows[i].forEach((cell) => tr.appendChild(el('td', null, cell == null ? '' : String(cell))));
+      tbody.appendChild(tr);
+    }
+  }
+
+  function buildTable(data, chunk) {
+    const wrap = el('div');
     const table = el('table', 'ts-spotter-table');
     const headRow = el('tr');
     headRow.appendChild(el('th', null, '#'));
     data.columns.forEach((c) => headRow.appendChild(el('th', null, c.name)));
     const head = el('thead');
     head.appendChild(headRow);
-    const body = el('tbody');
-    data.rows.forEach((row, i) => {
-      const tr = el('tr');
-      tr.appendChild(el('td', 'ts-spotter-rownum', String(i + 1)));
-      row.forEach((cell) => tr.appendChild(el('td', null, cell == null ? '' : String(cell))));
-      body.appendChild(tr);
+    const tbody = el('tbody');
+    table.append(head, tbody);
+    wrap.appendChild(table);
+
+    const size = chunk || data.rows.length;
+    let shown = Math.min(size, data.rows.length);
+    appendRows(tbody, data.rows, 0, shown);
+    if (shown < data.rows.length) {
+      const more = el('button', 'ts-spotter-more');
+      more.type = 'button';
+      const label = () => 'Show ' + Math.min(size, data.rows.length - shown) + ' more (' + shown + ' of ' + data.rows.length + ')';
+      more.textContent = label();
+      more.addEventListener('click', () => {
+        const next = Math.min(shown + size, data.rows.length);
+        appendRows(tbody, data.rows, shown, next);
+        shown = next;
+        if (shown >= data.rows.length) more.remove();
+        else more.textContent = label();
+      });
+      wrap.appendChild(more);
+    }
+    return wrap;
+  }
+
+  function underlyingSection(worksheet) {
+    const section = el('div');
+    const load = el('button', 'ts-spotter-more');
+    load.type = 'button';
+    load.textContent = 'Load underlying rows (all columns, up to ' + UNDERLYING_CAP.toLocaleString() + ')';
+    load.addEventListener('click', () => {
+      load.disabled = true;
+      load.textContent = 'Loading underlying rows…';
+      requestWorksheetData(worksheet, 'underlying').then(
+        (data) => {
+          load.remove();
+          const capped = data.rows.length >= UNDERLYING_CAP;
+          section.append(
+            el('div', 'ts-spotter-note', data.rows.length.toLocaleString() + ' rows × ' + data.columns.length + ' columns' + (capped ? ' (API cap reached; the table may be larger)' : '')),
+            buildTable(data, UNDERLYING_CHUNK)
+          );
+        },
+        (err) => {
+          load.disabled = false;
+          load.textContent = 'Retry: ' + err.message;
+        }
+      );
     });
-    table.append(head, body);
-    return table;
+    section.appendChild(load);
+    return section;
   }
 
   function fillData(body, context) {
@@ -188,14 +240,16 @@
       return;
     }
     body.textContent = 'Loading data for ' + context.worksheet + '…';
-    requestWorksheetData(context.worksheet).then(
+    requestWorksheetData(context.worksheet, 'summary').then(
       (data) => {
         body.textContent = '';
         body.append(
           el('h3', null, 'Shape'),
           buildShape(data),
-          el('h3', null, 'Data (' + data.rows.length + ' rows)'),
-          buildTable(data)
+          el('h3', null, 'Summary data (' + data.rows.length + ' rows)'),
+          buildTable(data),
+          el('h3', null, 'Underlying data'),
+          underlyingSection(context.worksheet)
         );
       },
       (err) => {
