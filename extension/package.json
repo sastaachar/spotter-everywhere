@@ -6,6 +6,8 @@
   "scripts": {
     "prepare-credentials": "test -f src/dev-credentials.js || cp src/dev-credentials.example.js src/dev-credentials.js",
     "build": "bun run prepare-credentials && bun build src/panel.js --outdir dist --target browser --minify",
-    "watch": "bun run prepare-credentials && bun build src/panel.js --outdir dist --target browser --watch"
+    "start": "bash scripts/dev-chrome.sh",
+    "reload": "node scripts/dev-reload.mjs",
+    "watch": "node scripts/dev-reload.mjs --watch"
   }
 }
