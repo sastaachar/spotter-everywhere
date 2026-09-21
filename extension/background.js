@@ -4,6 +4,7 @@ import { devCredentials } from './src/dev-credentials.js';
 const CREATE_SESSION = 'spotter:create-session';
 const CREATE_DATASET = 'spotter:create-dataset';
 const CREATE_LIVEBOARD = 'spotter:create-liveboard';
+const GET_LIVEBOARD = 'spotter:get-liveboard';
 const EMBED_TOKEN = 'spotter:embed-token';
 
 async function createSession(payload) {
@@ -58,6 +59,30 @@ async function createDataset(payload) {
     return { error: 'Worksheet build failed: ' + code };
   }
   return { dataset: body };
+}
+
+// Cheap existence check by (platform, guid) — no download, no build.
+async function getLiveboard(payload) {
+  if (!config.backendUrl) return { error: 'No backend configured (see extension/src/config.js).' };
+  let res;
+  try {
+    res = await fetch(new URL('/get-liveboard', config.backendUrl), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(devCredentials.backendApiKey ? { Authorization: 'Bearer ' + devCredentials.backendApiKey } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    return { error: 'Could not reach the backend: ' + ((err && err.message) || String(err)) };
+  }
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    const detail = body && (body.detail || body.error) ? (body.detail || body.error) : 'HTTP ' + res.status;
+    return { error: 'Liveboard lookup failed: ' + detail, body };
+  }
+  return { body };
 }
 
 // Build-once, reuse-by-name liveboard. Returns { body, notBuilt } — notBuilt
@@ -120,6 +145,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message.type === CREATE_DATASET) {
     createDataset(message.payload).then(sendResponse, (err) => sendResponse({ error: String((err && err.message) || err) }));
+    return true;
+  }
+  if (message.type === GET_LIVEBOARD) {
+    getLiveboard(message.payload || {}).then(sendResponse, (err) => sendResponse({ error: String((err && err.message) || err) }));
     return true;
   }
   if (message.type === CREATE_LIVEBOARD) {

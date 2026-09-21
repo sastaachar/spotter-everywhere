@@ -55,6 +55,11 @@ export const DEFAULT_RATE_LIMIT_PER_MINUTE = 120;
 const ONE_MINUTE_MS = 60_000;
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+// Deterministic liveboard name from (platform, guid) alone, so /get-liveboard
+// and /create-liveboard agree on the reuse key without sharing any other state.
+const liveboardKey = (platform: string, guid: string): string =>
+  `Spotter · ${platform} · ${guid}`.slice(0, 80);
+
 export function createApp(options: AppOptions) {
   const store = options.store ?? new SessionStore();
   const app = new Hono();
@@ -288,6 +293,34 @@ export function createApp(options: AppOptions) {
     return c.json({ name, columns, tml, liveboardId, liveboardUrl, imported, reused: false }, 201);
   });
 
+  // Look up an already-built liveboard by (platform, guid). Cheap: no model,
+  // no download, no import. Body/query: { platform, guid }. Returns
+  // { exists, liveboardId?, liveboardUrl? }. 503 when no cluster is configured.
+  app.post('/get-liveboard', async (c) => {
+    let platform = '';
+    let guid = '';
+    if ((c.req.header('content-type') ?? '').includes('application/json')) {
+      const b = (await c.req.json().catch(() => ({}))) as Record<string, string>;
+      platform = b.platform ?? '';
+      guid = b.guid ?? '';
+    }
+    platform = (platform || c.req.query('platform') || '').toLowerCase();
+    guid = guid || c.req.query('guid') || '';
+    if (!platform || !guid) {
+      return c.json({ error: 'invalid_request', detail: 'platform and guid are required' }, 400);
+    }
+    if (!options.tsHost || !options.tsToken) {
+      return c.json({ error: 'not_configured', detail: 'TS_HOST and TS_TOKEN must be set to look up liveboards' }, 503);
+    }
+    const name = liveboardKey(platform, guid);
+    const id = await findMetadataId({ host: options.tsHost, token: options.tsToken }, name, 'LIVEBOARD');
+    return c.json({
+      platform, guid, name, exists: Boolean(id),
+      liveboardId: id,
+      liveboardUrl: id ? `${options.tsHost.replace(/\/$/, '')}/#/pinboard/${id}` : undefined,
+    }, 200);
+  });
+
   // Platform-generic liveboard creation with per-stage status. Each source
   // platform declares its modeling language and how to read columns from it.
   const CONVERTERS: Record<string, { modeling: string; binary: boolean; parse: (data: Uint8Array | string) => Column[] }> = {
@@ -303,6 +336,7 @@ export function createApp(options: AppOptions) {
     const ct = c.req.header('content-type') ?? '';
     let platform = '';
     let name = '';
+    let guid = '';
     let filename = '';
     let bytes: Uint8Array | null = null;
     let text = '';
@@ -310,6 +344,7 @@ export function createApp(options: AppOptions) {
       const form = await c.req.formData();
       platform = String(form.get('platform') ?? '');
       name = String(form.get('name') ?? '');
+      guid = String(form.get('guid') ?? '');
       const model = form.get('model');
       if (typeof model === 'string') text = model;
       const file = form.get('file');
@@ -321,13 +356,16 @@ export function createApp(options: AppOptions) {
       const b = (await c.req.json().catch(() => ({}))) as Record<string, string>;
       platform = b.platform ?? '';
       name = b.name ?? '';
+      guid = b.guid ?? '';
       filename = b.filename ?? '';
       text = b.model ?? '';
       if (b.fileBase64) bytes = Uint8Array.from(atob(b.fileBase64), (ch) => ch.charCodeAt(0));
     }
 
     platform = platform.toLowerCase();
-    name = (name || filename.replace(/\.(twbx?|tdsx?|tmdl|zip)$/i, '') || '').slice(0, 80);
+    // When a guid is given, key on it (matches /get-liveboard); else fall back
+    // to an explicit name or the filename.
+    name = guid ? liveboardKey(platform, guid) : (name || filename.replace(/\.(twbx?|tdsx?|tmdl|zip)$/i, '') || '').slice(0, 80);
     const conv = CONVERTERS[platform];
     if (!conv) {
       return c.json({ error: 'unsupported_platform', detail: `platform must be one of: ${Object.keys(CONVERTERS).join(', ')}` }, 400);

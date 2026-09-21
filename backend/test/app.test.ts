@@ -371,3 +371,48 @@ describe('POST /create-liveboard (staged, platform-generic)', () => {
     expect(body.stages.filter((s) => s.status === 'skipped').map((s) => s.stage)).toEqual(['parse', 'generate', 'import', 'locate']);
   });
 });
+
+describe('POST /get-liveboard', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  test('503 when no cluster is configured', async () => {
+    const res = await makeApp().request('/get-liveboard', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ platform: 'tableau', guid: 'g1' }) });
+    expect(res.status).toBe(503);
+  });
+
+  test('400 without platform+guid', async () => {
+    const res = await makeApp({ tsHost: 'https://ts.example', tsToken: 't' }).request('/get-liveboard', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ platform: 'tableau' }) });
+    expect(res.status).toBe(400);
+  });
+
+  test('returns the liveboard id when it exists, keyed on platform+guid', async () => {
+    let searchedName = '';
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/metadata/search')) {
+        searchedName = JSON.parse(String(init?.body)).metadata[0].name_pattern;
+        return new Response(JSON.stringify([{ metadata_name: searchedName, metadata_id: 'LB-7' }]), { status: 200 });
+      }
+      return new Response('{}', { status: 200 });
+    }) as typeof fetch;
+    const res = await makeApp({ tsHost: 'https://ts.example', tsToken: 't' }).request('/get-liveboard', {
+      method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ platform: 'tableau', guid: '82f7-luid' }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { exists: boolean; liveboardId: string; name: string };
+    expect(body.exists).toBe(true);
+    expect(body.liveboardId).toBe('LB-7');
+    expect(body.name).toBe('Spotter · tableau · 82f7-luid');
+    expect(searchedName).toBe('Spotter · tableau · 82f7-luid');
+  });
+
+  test('exists:false when not found', async () => {
+    globalThis.fetch = (async (url: string) => new Response(JSON.stringify(String(url).includes('/metadata/search') ? [] : {}), { status: 200 })) as typeof fetch;
+    const res = await makeApp({ tsHost: 'https://ts.example', tsToken: 't' }).request('/get-liveboard', {
+      method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ platform: 'tableau', guid: 'x' }),
+    });
+    const body = (await res.json()) as { exists: boolean; liveboardId?: string };
+    expect(body.exists).toBe(false);
+    expect(body.liveboardId).toBeUndefined();
+  });
+});

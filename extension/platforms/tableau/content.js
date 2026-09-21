@@ -22,6 +22,7 @@
   const CREATE_SESSION = 'spotter:create-session';
   const CREATE_DATASET = 'spotter:create-dataset';
   const CREATE_LIVEBOARD = 'spotter:create-liveboard';
+  const GET_LIVEBOARD = 'spotter:get-liveboard';
   const PLATFORM = 'tableau';
   const LB_BUTTON_CLASS = 'ts-lb-btn';
   const FRAME_CLASS = 'ts-spotter-frame';
@@ -164,9 +165,9 @@
     return btoa(bin);
   }
 
-  function requestLiveboard(payload) {
+  function workerCall(type, payload) {
     return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage({ type: CREATE_LIVEBOARD, payload }, (res) => {
+      chrome.runtime.sendMessage({ type, payload }, (res) => {
         if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
         if (!res) return reject(new Error('no response from the extension worker'));
         resolve(res);
@@ -185,18 +186,24 @@
     };
     try {
       const wb = await resolveWorkbook(context);
-      const name = (wb.name + ' ' + (wb.luid || '')).trim().slice(0, 80);
+      const guid = wb.luid;
+      if (!guid) return fail('Could not resolve the workbook id for this view.');
 
-      // Build once: ask the backend if it already exists (no download).
-      let res = await requestLiveboard({ platform: PLATFORM, name });
-      if (res.notBuilt) {
+      // Build once: look it up by (platform, guid) first — no download.
+      let liveboardId;
+      const found = await workerCall(GET_LIVEBOARD, { platform: PLATFORM, guid });
+      if (found.error && !/reach the backend/i.test(found.error)) return fail(found.error);
+      if (found.error) return fail(found.error);
+      if (found.body && found.body.exists) {
+        liveboardId = found.body.liveboardId;
+      } else {
         if (!wb.downloadUrl) return fail('This workbook has no download URL; cannot build the liveboard.');
         loading.textContent = 'Building the liveboard from the workbook…';
         const fileBase64 = await fetchWorkbookBase64(wb.downloadUrl);
-        res = await requestLiveboard({ platform: PLATFORM, name, filename: wb.name + '.twbx', fileBase64 });
+        const res = await workerCall(CREATE_LIVEBOARD, { platform: PLATFORM, guid, filename: wb.name + '.twbx', fileBase64 });
+        if (res.error) return fail(res.error);
+        liveboardId = res.body && res.body.liveboardId;
       }
-      if (res.error) return fail(res.error);
-      const liveboardId = res.body && res.body.liveboardId;
       if (!liveboardId) return fail('The liveboard was not created (the cluster may need data configured).');
 
       loading.remove();
