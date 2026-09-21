@@ -206,12 +206,18 @@ export function createApp(options: AppOptions) {
   // plus a liveboard (table viz + a column chart per measure). Returns the TML;
   // when TS_HOST/TS_TOKEN are set it also imports table -> worksheet -> liveboard
   // and returns the liveboard id. Body: multipart `file`, or JSON { filename?, fileBase64 }.
+  // Build once, then reuse. `name` is the idempotency key (pass the workbook's
+  // LUID or a "<workbook> <luid>" so two same-named workbooks don't collide).
+  // Called with just { name } it looks up an existing liveboard and returns it
+  // with no download; 404 not_built means "resend with the .twb to build it".
   app.post('/liveboard', bodyLimit({ maxSize: options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES }), async (c) => {
     const ct = c.req.header('content-type') ?? '';
     let filename = '';
+    let provided = '';
     let bytes: Uint8Array | null = null;
     if (ct.includes('multipart/form-data')) {
       const form = await c.req.formData();
+      provided = String(form.get('name') ?? '');
       const file = form.get('file');
       if (file && typeof file !== 'string') {
         bytes = new Uint8Array(await file.arrayBuffer());
@@ -219,9 +225,31 @@ export function createApp(options: AppOptions) {
       }
     } else if (ct.includes('application/json')) {
       const b = (await c.req.json().catch(() => ({}))) as Record<string, string>;
+      provided = b.name ?? '';
       filename = b.filename ?? '';
       if (b.fileBase64) bytes = Uint8Array.from(atob(b.fileBase64), (ch) => ch.charCodeAt(0));
     }
+
+    const name = (provided || filename.replace(/\.(twbx?|tdsx?)$/i, '') || '').slice(0, 80);
+    const wantText = c.req.query('format') === 'text';
+    const tsEnv = options.tsHost && options.tsToken ? { host: options.tsHost, token: options.tsToken } : null;
+    const pinboardUrl = (id: string) => `${options.tsHost!.replace(/\/$/, '')}/#/pinboard/${id}`;
+
+    if (!name && !bytes) {
+      return c.json({ error: 'invalid_request', detail: 'provide a name (to look up) or a .twb/.twbx file (to build)' }, 400);
+    }
+
+    // Reuse an already-built liveboard by name — no download, no rebuild.
+    if (tsEnv && name && !wantText) {
+      const existing = await findMetadataId(tsEnv, name, 'LIVEBOARD');
+      if (existing) {
+        return c.json({ name, liveboardId: existing, liveboardUrl: pinboardUrl(existing), imported: true, reused: true }, 200);
+      }
+      if (!bytes) {
+        return c.json({ error: 'not_built', detail: `no liveboard named "${name}"; resend with the .twb to build it` }, 404);
+      }
+    }
+
     if (!bytes || bytes.length === 0) {
       return c.json({ error: 'invalid_request', detail: 'no .twb/.twbx file provided' }, 400);
     }
@@ -234,12 +262,11 @@ export function createApp(options: AppOptions) {
     }
     if (!columns.length) return c.json({ error: 'no_columns', detail: 'no fields found in the workbook' }, 422);
 
-    const name = (filename || 'workbook').replace(/\.(twbx?|tdsx?)$/i, '').slice(0, 80);
     const base = generateTml(name, columns);
     const liveboardTml = generateLiveboardTml(name, base.worksheetName, columns);
     const tml = { ...base, liveboardTml };
 
-    if (c.req.query('format') === 'text') {
+    if (wantText) {
       return c.text([tml.tableTml, tml.worksheetTml, liveboardTml].join('\n---\n') + '\n', 200, {
         'Content-Type': 'text/yaml; charset=utf-8',
       });
@@ -248,17 +275,16 @@ export function createApp(options: AppOptions) {
     let liveboardId: string | undefined;
     let liveboardUrl: string | undefined;
     let imported = false;
-    if (options.tsHost && options.tsToken) {
-      const tsEnv = { host: options.tsHost, token: options.tsToken };
+    if (tsEnv) {
       const result = await importTml(tsEnv, [tml.tableTml, tml.worksheetTml, liveboardTml]);
       liveboardId = findGuid(result, name);
       if (liveboardId) {
         imported = true;
-        liveboardUrl = `${options.tsHost.replace(/\/$/, '')}/#/pinboard/${liveboardId}`;
+        liveboardUrl = pinboardUrl(liveboardId);
       }
     }
 
-    return c.json({ name, columns, tml, liveboardId, liveboardUrl, imported }, 201);
+    return c.json({ name, columns, tml, liveboardId, liveboardUrl, imported, reused: false }, 201);
   });
 
   app.post('/worksheet', bodyLimit({ maxSize: options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES }), async (c) => {

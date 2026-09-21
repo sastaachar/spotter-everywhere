@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test, afterEach } from 'bun:test';
 import { createApp } from '../src/app';
 import { keysMatch } from '../src/auth';
 import { rateLimit } from '../src/rate-limit';
@@ -278,5 +278,40 @@ describe('POST /liveboard', () => {
 
   test('400 without a file', async () => {
     expect((await lb(makeApp(), {})).status).toBe(400);
+  });
+});
+
+describe('/liveboard build-once reuse', () => {
+  const TS = { tsHost: 'https://ts.example', tsToken: 'tok' };
+  const realFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  test('reuses an existing liveboard by name with no file, no rebuild', async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      calls.push(String(url));
+      if (String(url).includes('/metadata/search')) {
+        return new Response(JSON.stringify([{ metadata_name: 'Superstore', metadata_id: 'LB-1' }]), { status: 200 });
+      }
+      return new Response('{}', { status: 200 });
+    }) as typeof fetch;
+
+    const app = makeApp(TS);
+    const res = await app.request('/liveboard', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ name: 'Superstore' }) });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { reused: boolean; liveboardId: string; liveboardUrl: string };
+    expect(body.reused).toBe(true);
+    expect(body.liveboardId).toBe('LB-1');
+    expect(body.liveboardUrl).toContain('/#/pinboard/LB-1');
+    expect(calls.some((u) => u.includes('/metadata/import'))).toBe(false); // never built
+  });
+
+  test('404 not_built when it does not exist yet and no file is sent', async () => {
+    globalThis.fetch = (async (url: string) =>
+      new Response(JSON.stringify(String(url).includes('/metadata/search') ? [] : {}), { status: 200 })) as typeof fetch;
+    const app = makeApp(TS);
+    const res = await app.request('/liveboard', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ name: 'Nope' }) });
+    expect(res.status).toBe(404);
+    expect((await res.json() as { error: string }).error).toBe('not_built');
   });
 });
