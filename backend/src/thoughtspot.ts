@@ -157,6 +157,9 @@ export function shareMetadata(
     metadata_type: metadataType,
     metadata_identifiers: metadataIds,
     permissions: principals.map((principal) => ({ principal, share_mode: shareMode })),
+    // Required by the cluster's share mutation (String!); empty = no notification.
+    message: '',
+    notify_on_share: false,
   });
 }
 

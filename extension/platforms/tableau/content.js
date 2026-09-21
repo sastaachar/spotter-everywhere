@@ -20,6 +20,7 @@
   const UNDERLYING_CAP = 10000;
   const UNDERLYING_CHUNK = 500;
   const CREATE_SESSION = 'spotter:create-session';
+  const CREATE_DATASET = 'spotter:create-dataset';
   const PLATFORM = 'tableau';
   const FRAME_CLASS = 'ts-spotter-frame';
   const CLOSE_EVENT = 'spotter:close';
@@ -408,14 +409,71 @@
     document.querySelectorAll('.' + FRAME_CLASS).forEach((el) => el.remove());
   }
 
-  function openSpotter(context) {
+  // Best-effort logged-in Tableau user (via the bridge); fall back to the site.
+  function resolveUserId(context) {
+    return requestWorksheetData(null, 'user').then(
+      (u) => (u && u.username) || context.site || 'tableau_user',
+      () => context.site || 'tableau_user'
+    );
+  }
+
+  // Load this sheet's rows into ThoughtSpot via the backend (service worker,
+  // not CORS-restricted): provision/reuse the user, load into Falcon, build a
+  // worksheet. Returns the /dataset response body.
+  function createDataset(payload) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ type: CREATE_DATASET, payload }, (res) => {
+        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+        if (!res || res.error) return reject(new Error((res && res.error) || 'dataset request failed'));
+        resolve(res.dataset); // background wraps the /dataset body as { dataset }
+      });
+    });
+  }
+
+  // The real pipeline: read this sheet's rows -> provision/reuse the user + load
+  // into Falcon + build a worksheet -> open panel.html embedding THAT worksheet,
+  // authenticated AS the user. Reuses an existing TS user (JIT is idempotent).
+  async function openSpotter(context) {
     closePanel();
-    const frame = document.createElement('iframe');
-    frame.className = FRAME_CLASS;
-    frame.title = 'Spotter';
-    frame.src = chrome.runtime.getURL('panel.html') + '#' + encodeURIComponent(JSON.stringify({ ...context, platform: PLATFORM }));
-    document.body.appendChild(frame);
+    const loading = el('aside', FRAME_CLASS + ' ts-spotter-loading');
+    loading.textContent = 'Loading this sheet into Spotter…';
+    document.body.appendChild(loading);
     document.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: context }));
+
+    const openPanelFrame = (extra) => {
+      loading.remove();
+      const frame = document.createElement('iframe');
+      frame.className = FRAME_CLASS;
+      frame.title = 'Spotter';
+      frame.src = chrome.runtime.getURL('panel.html') + '#'
+        + encodeURIComponent(JSON.stringify({ ...context, platform: PLATFORM, ...extra }));
+      document.body.appendChild(frame);
+    };
+
+    let userid = context.site || 'tableau_user';
+    try {
+      userid = await resolveUserId(context);
+      let worksheetId = null;
+      let worksheetName = null;
+      if (context.worksheet) {
+        loading.textContent = 'Loading “' + context.worksheet + '” into ThoughtSpot…';
+        const data = await requestWorksheetData(context.worksheet, 'underlying');
+        const body = await createDataset({
+          userid, platform: PLATFORM,
+          name: context.sheetTitle || context.worksheet,
+          data: { columns: data.columns, rows: data.rows },
+        });
+        worksheetId = (body.embed && body.embed.worksheetId)
+          || (body.dataset && (body.dataset.worksheetId || body.dataset.tableId));
+        worksheetName = body.dataset && (body.dataset.worksheetName || body.dataset.tableName);
+      }
+      // workspace is the userid the embed authenticates as — keep it equal to the
+      // one /dataset provisioned/shared for, so access lines up.
+      openPanelFrame({ worksheetId, worksheetName, userid, workspace: userid });
+    } catch (err) {
+      // Load unavailable — open the panel on the configured default model.
+      openPanelFrame({ userid, workspace: userid, loadError: err.message });
+    }
   }
 
   window.addEventListener('message', (ev) => {
