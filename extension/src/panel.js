@@ -14,6 +14,7 @@ const SUBJECT = {
   powerbi: (c) => [c.visualTitle, c.reportTitle],
 };
 
+const log = (...a) => console.log('[spotter:panel]', ...a);
 const status = document.getElementById('status');
 const subject = document.getElementById('subject');
 
@@ -64,10 +65,13 @@ async function main() {
   showStatus('Connecting to ThoughtSpot…', false);
   // Mint once up front to learn the host the token is valid for; then embed
   // against THAT host. A getAuthToken re-mints on the SDK's refresh.
+  log('panel open', { platform, liveboardId: context.liveboardId, worksheetId: context.worksheetId });
   let first;
   try {
     first = await requestEmbedToken(context);
+    log('embed token minted', { host: first.host, tokenChars: (first.token || '').length });
   } catch (err) {
+    log('embed token failed:', err.message);
     showStatus('Could not authenticate: ' + err.message, true);
     return;
   }
@@ -75,15 +79,18 @@ async function main() {
   let pending = first.token;
   const getAuthToken = async () => {
     if (pending) { const t = pending; pending = null; return t; }
+    log('SDK requested a fresh token');
     return (await requestEmbedToken(context)).token;
   };
+  log('init against host', host);
   initSpotter({ thoughtSpotHost: host, getAuthToken });
 
   // Liveboard mode: the caller built/reused a liveboard and passed its id.
   if (context.liveboardId) {
     const LbEmbed = LIVEBOARDS[platform];
+    log('rendering LiveboardEmbed', context.liveboardId);
     const lb = new LbEmbed('#spotter', { liveboardId: context.liveboardId });
-    lb.on('load', () => showStatus('', false));
+    lb.on('load', () => { log('liveboard loaded'); showStatus('', false); });
     lb.on('error', (payload) => {
       console.error('LiveboardEmbed error', payload);
       showStatus('The liveboard could not load. Check the host and cluster access.', true);
@@ -105,6 +112,7 @@ async function main() {
     return;
   }
   const viewConfig = { worksheetId };
+  log('rendering SpotterEmbed', viewConfig);
   const embed = new Embed('#spotter', viewConfig);
   embed.on('load', () => showStatus('', false));
   embed.on('error', (payload) => {
