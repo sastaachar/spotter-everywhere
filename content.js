@@ -14,6 +14,9 @@
   const VIEW_PATH_PATTERN = /^\/t\/([^/]+)\/views\/([^/]+)\/([^/?#]+)/;
   const SESSION_PATTERN = /\/sessions\/([^/?]+)/;
   const SCAN_DEBOUNCE_MS = 100;
+  const REQUEST_EVENT = 'spotter:request';
+  const RESPONSE_EVENT = 'spotter:response';
+  const REQUEST_TIMEOUT_MS = 15000;
 
   const SPARKLE_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true">' +
@@ -108,6 +111,99 @@
     return dl;
   }
 
+  let requestSeq = 0;
+  const pendingRequests = new Map();
+
+  window.addEventListener('message', (ev) => {
+    if (ev.origin !== location.origin || !ev.data || ev.data.type !== RESPONSE_EVENT) return;
+    const pending = pendingRequests.get(ev.data.requestId);
+    if (!pending) return;
+    pendingRequests.delete(ev.data.requestId);
+    clearTimeout(pending.timer);
+    if (ev.data.error) pending.reject(new Error(ev.data.error));
+    else pending.resolve(ev.data.result);
+  });
+
+  function requestWorksheetData(worksheet) {
+    if (window.parent === window) {
+      return Promise.reject(new Error('Not inside the Tableau portal page; data bridge unavailable.'));
+    }
+    const requestId = ++requestSeq;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pendingRequests.delete(requestId);
+        reject(new Error('Timed out waiting for the data bridge.'));
+      }, REQUEST_TIMEOUT_MS);
+      pendingRequests.set(requestId, { resolve, reject, timer });
+      window.parent.postMessage({ type: REQUEST_EVENT, requestId, worksheet }, location.origin);
+    });
+  }
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text != null) node.textContent = text;
+    return node;
+  }
+
+  function describeFilter(f) {
+    if (f.values) return f.field + ': ' + (f.exclude ? 'exclude ' : '') + f.values.join(', ');
+    if (f.min != null) return f.field + ': ' + f.min + ' to ' + f.max;
+    if (f.period) return f.field + ': ' + f.range + ' ' + f.period;
+    return f.field + ': ' + f.type;
+  }
+
+  function buildShape(data) {
+    const dl = el('dl', 'ts-spotter-rows');
+    const add = (label, value) => dl.append(el('dt', null, label), el('dd', null, value));
+    add('Rows', String(data.totalRows));
+    add('Columns', data.columns.map((c) => c.name + ' (' + c.type + ')').join('\n'));
+    add('Filters', data.filters.length ? data.filters.map(describeFilter).join('\n') : 'none');
+    add('Parameters', data.parameters.length ? data.parameters.map((p) => p.name + ' = ' + p.value).join('\n') : 'none');
+    add('Selected marks', String(data.selectedMarks));
+    return dl;
+  }
+
+  function buildTable(data) {
+    const table = el('table', 'ts-spotter-table');
+    const headRow = el('tr');
+    headRow.appendChild(el('th', null, '#'));
+    data.columns.forEach((c) => headRow.appendChild(el('th', null, c.name)));
+    const head = el('thead');
+    head.appendChild(headRow);
+    const body = el('tbody');
+    data.rows.forEach((row, i) => {
+      const tr = el('tr');
+      tr.appendChild(el('td', 'ts-spotter-rownum', String(i + 1)));
+      row.forEach((cell) => tr.appendChild(el('td', null, cell == null ? '' : String(cell))));
+      body.appendChild(tr);
+    });
+    table.append(head, body);
+    return table;
+  }
+
+  function fillData(body, context) {
+    if (!context.worksheet) {
+      body.textContent = 'No worksheet found behind this title.';
+      return;
+    }
+    body.textContent = 'Loading data for ' + context.worksheet + '…';
+    requestWorksheetData(context.worksheet).then(
+      (data) => {
+        body.textContent = '';
+        body.append(
+          el('h3', null, 'Shape'),
+          buildShape(data),
+          el('h3', null, 'Data (' + data.rows.length + ' rows)'),
+          buildTable(data)
+        );
+      },
+      (err) => {
+        body.textContent = err.message;
+      }
+    );
+  }
+
   function openPanel(context) {
     closePanel();
     const panel = document.createElement('aside');
@@ -126,12 +222,10 @@
     close.addEventListener('click', closePanel);
     header.append(heading, close);
 
-    const body = document.createElement('div');
-    body.className = 'ts-spotter-body';
-    body.textContent = 'Spotter insights will appear here.';
-
+    const body = el('div', 'ts-spotter-body');
     panel.append(header, buildRows(context), body);
     document.body.appendChild(panel);
+    fillData(body, context);
 
     document.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: context }));
   }

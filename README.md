@@ -31,12 +31,24 @@ Opens a right-hand panel stub showing the sheet title, and dispatches a
 real Spotter experience into `openPanel()` in `content.js`, or listen for the
 event from another script.
 
+## Data bridge
+
+Tableau's portal page loads its own JavaScript API and keeps a live viz object
+in the page's main world. `bridge.js` runs there (`world: "MAIN"`, top frame
+only) and answers `spotter:request` messages from the viz iframe with the
+worksheet's summary data, columns, filters, parameters and selection count via
+`getSummaryDataAsync` and friends. The panel renders the shape and the full row
+table. No network interception, no extra authentication: it rides the session
+the portal already has. Outside the portal page (a bare `:embed=y` view) the
+bridge is absent and the panel says so.
+
 ## Files
 
 | File | Purpose |
 | --- | --- |
 | `manifest.json` | MV3 manifest, scoped to the one Tableau host, all frames |
-| `content.js` | Finds title elements, injects the button, renders the panel |
+| `content.js` | Finds title elements, injects the button, renders the panel, asks the bridge for data |
+| `bridge.js` | MAIN-world script in the portal page; reads worksheet data through Tableau's JS API |
 | `content.css` | Button and panel styles, namespaced with `ts-spotter-` |
 
 ## Development loop
