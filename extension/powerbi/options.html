@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Power BI Spotter settings</title>
+  <style>
+    body { font: 14px/20px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #1a1a1a; margin: 24px; max-width: 480px; }
+    label { display: block; margin: 12px 0 4px; font-weight: 600; }
+    input { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid #ccc; border-radius: 6px; font: inherit; }
+    button { margin-top: 16px; padding: 6px 14px; border: 1px solid #2770ef; border-radius: 12px; background: #fff; color: #2770ef; font: inherit; cursor: pointer; }
+    #status { margin-left: 8px; color: #666; }
+  </style>
+</head>
+<body>
+  <h1>Power BI Spotter</h1>
+  <form id="form">
+    <label for="backendUrl">Backend URL</label>
+    <input id="backendUrl" type="url" placeholder="https://spotter-backend.example" required>
+    <label for="apiKey">API key</label>
+    <input id="apiKey" type="password" autocomplete="off" required>
+    <button type="submit">Save</button><span id="status"></span>
+  </form>
+  <script src="options.js"></script>
+</body>
+</html>
