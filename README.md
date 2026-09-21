@@ -39,6 +39,20 @@ event from another script.
 | `content.js` | Finds title elements, injects the button, renders the panel |
 | `content.css` | Button and panel styles, namespaced with `ts-spotter-` |
 
+## Development loop
+
+Content scripts are copied into a page at load time, so edits on disk do not
+reach open tabs. After changing `content.js` or `content.css`, click Reload on
+the extension card at `chrome://extensions`, then refresh the Tableau tab.
+Manifest changes always need the extension reload.
+
+The button is injected into the `:embed=y` viz iframe (same host as the portal
+page), which `all_frames: true` covers. Tableau rewrites the title's inner text
+region during bootstrap, after `document_idle`, so injection is gated on the
+button actually being present rather than on a one-time marker. The script logs
+`[Tableau Spotter] content script loaded in <url>` in the frame's console
+context so you can confirm it ran.
+
 ## Notes
 
 - No background service worker, storage, or network calls yet. The extension

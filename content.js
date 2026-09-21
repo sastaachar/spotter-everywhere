@@ -50,7 +50,10 @@
   }
 
   function inject({ titleRoot, textEl }) {
-    if (titleRoot.hasAttribute(INJECTED_ATTR)) return;
+    // Gate on the button itself, not a marker on the outer div: during
+    // Tableau's bootstrap the outer div persists while its inner text region
+    // is replaced, which silently removes anything we appended earlier.
+    if (textEl.querySelector(':scope > .' + BUTTON_CLASS)) return;
     titleRoot.setAttribute(INJECTED_ATTR, '1');
     // Read the title fresh on each click (Tableau may rename it), but skip
     // our own button so its label is not mixed into the sheet name.
@@ -116,6 +119,7 @@
   const observer = new MutationObserver(scheduleScan);
   observer.observe(document.documentElement, { childList: true, subtree: true });
   scheduleScan();
+  console.log('[Tableau Spotter] content script loaded in', location.href);
 
   document.addEventListener('keydown', (ev) => {
     if (ev.key === 'Escape') closePanel();
