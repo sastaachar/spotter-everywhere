@@ -37,6 +37,12 @@ options page values win when set. Without credentials from either place the
 panel says so and links to the options page. Alt+click the button for the older details panel
 (identity, shape, summary and underlying rows, send to backend).
 
+The cluster must allow the extension to frame it. Once per cluster, from a
+shell that can SSH to it, run `scripts/allow-embed.sh` (defaults to the
+jm-saas-2 dev box at `admin@10.79.138.0`). It adds the extension origin and the
+Tableau host to CSP `frame-ancestors` and opens CORS; without it the Spotter
+frame shows "refused to connect".
+
 The panel bundle is not committed. Build it before loading the extension:
 
 ```
