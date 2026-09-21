@@ -45,3 +45,62 @@ export function generateTml(name: string, columns: Column[]): GeneratedTml {
 
   return { tableName, worksheetName: name, tableTml, worksheetTml };
 }
+
+// Falcon numeric types default to measures; everything else to attributes.
+const MEASURE_TYPES = new Set(['INT64', 'INT32', 'DOUBLE', 'FLOAT', 'DECIMAL']);
+function columnTypeFor(dataType?: string): 'MEASURE' | 'ATTRIBUTE' {
+  return dataType && MEASURE_TYPES.has(dataType.toUpperCase()) ? 'MEASURE' : 'ATTRIBUTE';
+}
+
+export interface UploadedColumn {
+  logicalName?: string;
+  physicalName?: string;
+  name?: string;
+  dataType?: string;
+}
+
+/**
+ * Generate a worksheet TML that sits on top of an already-uploaded table.
+ * A worksheet over an EXISTING table needs a `table_paths` alias, and the
+ * worksheet columns reference that alias (`<ALIAS>::<COLUMN>`), not the table
+ * name — matching a real `tml/export` of a worksheet.
+ */
+export function generateWorksheetOnTable(
+  worksheetName: string,
+  tableName: string,
+  columns: UploadedColumn[],
+): string {
+  const alias = `${tableName.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'T'}_1`;
+
+  const cols = columns
+    .map((c) => ({
+      name: c.logicalName ?? c.name ?? '',
+      dbName: c.physicalName ?? c.logicalName ?? c.name ?? '',
+      dataType: c.dataType,
+    }))
+    .filter((c) => c.name);
+
+  const wsCols = cols
+    .map((c) => [
+      `  - name: "${q(c.name)}"`,
+      `    column_id: "${q(alias)}::${q(c.dbName)}"`,
+      '    properties:',
+      `      column_type: ${columnTypeFor(c.dataType)}`,
+    ].join('\n'))
+    .join('\n');
+
+  return [
+    'worksheet:',
+    `  name: "${q(worksheetName)}"`,
+    '  tables:',
+    `  - name: "${q(tableName)}"`,
+    '  table_paths:',
+    `  - id: "${q(alias)}"`,
+    `    table: "${q(tableName)}"`,
+    '    join_path:',
+    '    - {}',
+    '  worksheet_columns:',
+    wsCols,
+    '',
+  ].join('\n');
+}

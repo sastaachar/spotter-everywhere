@@ -15,6 +15,7 @@ const app = createApp({
   tsToken: Bun.env.TS_TOKEN,
   tsUserPrefix: Bun.env.TS_USER_PREFIX,
   tsAccountType: Bun.env.TS_ACCOUNT_TYPE,
+  tsEmailDomain: Bun.env.TS_EMAIL_DOMAIN,
 });
 
 export default { port, fetch: app.fetch };

@@ -8,6 +8,7 @@ interface WorkerEnv {
   TS_TOKEN?: string;
   TS_USER_PREFIX?: string;
   TS_ACCOUNT_TYPE?: string;
+  TS_EMAIL_DOMAIN?: string;
 }
 
 let app: ReturnType<typeof createApp> | undefined;
@@ -25,6 +26,7 @@ export default {
       tsToken: env.TS_TOKEN,
       tsUserPrefix: env.TS_USER_PREFIX,
       tsAccountType: env.TS_ACCOUNT_TYPE,
+      tsEmailDomain: env.TS_EMAIL_DOMAIN,
     });
     return app.fetch(req, env as Record<string, unknown>, ctx as never);
   },

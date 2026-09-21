@@ -35,7 +35,10 @@ export interface EnsureUserOptions {
   prefix?: string;
   /** LOCAL_USER (default), SAML_USER, OIDC_USER, ... */
   accountType?: string;
+  /** Real email if known; otherwise one is synthesized from the username. */
   email?: string;
+  /** Domain for the synthesized email when `email` is absent. */
+  emailDomain?: string;
 }
 
 // A strong random password, so LOCAL_USER creation doesn't trigger an
@@ -80,13 +83,19 @@ export async function ensureUser(env: TsEnv, opts: EnsureUserOptions): Promise<E
   if (existing) return { ...existing, created: false };
 
   const displayName = `${opts.userid} (${opts.platform})`.slice(0, 128);
+  // This cluster's create-user mutation requires an email (String!), so always
+  // send one — the caller's if known, else a deterministic synthetic address.
+  // The cluster enforces an email-domain allowlist (error 12714,
+  // NON_WHITE_LISTED_DOMAIN). Default to the cluster's own domain; override with
+  // TS_EMAIL_DOMAIN, or add a domain to the allowlist via tscli.
+  const email = opts.email || `${username}@${opts.emailDomain ?? 'thoughtspot.com'}`;
   try {
     const created = (await ts(env, '/api/rest/2.0/users/create', {
       name: username,
       display_name: displayName,
       password: randomPassword(),
       account_type: opts.accountType ?? 'LOCAL_USER',
-      ...(opts.email ? { email: opts.email } : {}),
+      email,
     })) as Record<string, unknown>;
     return {
       id: String(created.id),
@@ -102,6 +111,16 @@ export async function ensureUser(env: TsEnv, opts: EnsureUserOptions): Promise<E
   }
 }
 
+/** Export an object's TML (YAML edoc). Read-only; used to learn a table's exact
+ *  column identifiers before generating a worksheet on top of it. */
+export function exportTml(env: TsEnv, guids: string[]): Promise<unknown> {
+  return ts(env, '/api/rest/2.0/metadata/tml/export', {
+    metadata: guids.map((id) => ({ identifier: id })),
+    edoc_format: 'YAML',
+    export_fqn: true,
+  });
+}
+
 /** Import table + worksheet TML; returns the raw import response (carries GUIDs). */
 export function importTml(env: TsEnv, tmls: string[]): Promise<unknown> {
   return ts(env, '/api/rest/2.0/metadata/tml/import', {
@@ -109,6 +128,22 @@ export function importTml(env: TsEnv, tmls: string[]): Promise<unknown> {
     import_policy: 'ALL_OR_NONE',
     create_new: true,
   });
+}
+
+/** Resolve a metadata object's GUID by name via v2 search (reliable, unlike
+ *  parsing internal upload responses). Defaults to LOGICAL_TABLE. */
+export async function findMetadataId(env: TsEnv, name: string, type = 'LOGICAL_TABLE'): Promise<string | undefined> {
+  const res = await ts(env, '/api/rest/2.0/metadata/search', {
+    metadata: [{ type, name_pattern: name }],
+    record_size: 10,
+  });
+  const list = Array.isArray(res) ? (res as Record<string, unknown>[]) : [];
+  // Exact-name only: name_pattern matches substrings, so a loose fallback would
+  // return a different object (e.g. the "<name> Table" for a "<name>" worksheet).
+  const pick = list.find((r) => (r.metadata_name ?? r.name) === name);
+  if (!pick) return undefined;
+  const id = pick.metadata_id ?? pick.id ?? (pick.metadata_header as Record<string, unknown> | undefined)?.id;
+  return id ? String(id) : undefined;
 }
 
 /** Search the worksheet — the "user searches the data" step. */

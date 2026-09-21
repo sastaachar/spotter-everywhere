@@ -8,16 +8,21 @@
     "start": "bun src/index.ts",
     "cf:dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "node:dev": "node --env-file=.dev.vars --import tsx --watch src/node.ts",
+    "node:start": "node --env-file=.dev.vars --import tsx src/node.ts",
     "test": "bun test --coverage",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@hono/node-server": "2.1.1",
     "fast-xml-parser": "^5.11.1",
     "fflate": "^0.8.3",
-    "hono": "4.13.8"
+    "hono": "4.13.8",
+    "undici": "8.10.2"
   },
   "devDependencies": {
     "@types/bun": "1.4.2",
+    "tsx": "4.23.15",
     "typescript": "7.0.2",
     "wrangler": "^4.135.0"
   }
