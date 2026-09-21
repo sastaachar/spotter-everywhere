@@ -7,6 +7,12 @@
   const BUTTON_CLASS = 'ts-spotter-btn';
   const PANEL_CLASS = 'ts-spotter-panel';
   const OPEN_EVENT = 'spotter:open';
+  const VIZ_CONTAINER_SELECTOR = '[data-tb-test-id="VisualizationContainer"]';
+  const ZONE_SELECTOR = '.tab-zone';
+  const ZONE_ID_PREFIX = 'tabZoneId';
+  const DASHBOARD_REGION_ID = 'tab-dashboard-region';
+  const VIEW_PATH_PATTERN = /^\/t\/([^/]+)\/views\/([^/]+)\/([^/?#]+)/;
+  const SESSION_PATTERN = /\/sessions\/([^/?]+)/;
   const SCAN_DEBOUNCE_MS = 100;
 
   const SPARKLE_SVG =
@@ -25,7 +31,29 @@
     return targets;
   }
 
-  function buildButton(sheetTitle) {
+  function vizContext(titleRoot, sheetTitle) {
+    const pathMatch = location.pathname.match(VIEW_PATH_PATTERN) || [];
+    const zone = titleRoot.closest(ZONE_SELECTOR);
+    const viz = titleRoot.closest(VIZ_CONTAINER_SELECTOR);
+    const sessionEntry = performance
+      .getEntriesByType('resource')
+      .map((e) => e.name.match(SESSION_PATTERN))
+      .find(Boolean);
+    return {
+      site: pathMatch[1] || null,
+      workbook: pathMatch[2] || null,
+      dashboard: pathMatch[3] ? decodeURIComponent(pathMatch[3]) : null,
+      isDashboard: !!document.getElementById(DASHBOARD_REGION_ID),
+      worksheet: viz ? viz.getAttribute('tb-test-id') : null,
+      sheetTitle,
+      zoneId: zone && zone.id.startsWith(ZONE_ID_PREFIX) ? zone.id.slice(ZONE_ID_PREFIX.length) : null,
+      titleElementId: titleRoot.id,
+      sessionId: sessionEntry ? sessionEntry[1] : null,
+      url: location.href,
+    };
+  }
+
+  function buildButton(titleRoot, sheetTitle) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = BUTTON_CLASS;
@@ -35,7 +63,7 @@
     btn.addEventListener('click', (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
-      openPanel(sheetTitle());
+      openPanel(vizContext(titleRoot, sheetTitle()));
     });
     btn.addEventListener('mousedown', (ev) => ev.stopPropagation());
     return btn;
@@ -52,10 +80,35 @@
         .map((n) => n.textContent || '')
         .join('')
         .trim();
-    textEl.appendChild(buildButton(sheetTitle));
+    textEl.appendChild(buildButton(titleRoot, sheetTitle));
   }
 
-  function openPanel(sheetTitle) {
+  const PANEL_ROWS = [
+    ['Dashboard', (c) => (c.isDashboard ? c.dashboard : c.dashboard + ' (sheet view)')],
+    ['Workbook', (c) => c.workbook],
+    ['Worksheet', (c) => c.worksheet],
+    ['Sheet title', (c) => c.sheetTitle],
+    ['Zone id', (c) => c.zoneId],
+    ['Site', (c) => c.site],
+    ['VizQL session', (c) => c.sessionId],
+    ['Title element', (c) => c.titleElementId],
+  ];
+
+  function buildRows(context) {
+    const dl = document.createElement('dl');
+    dl.className = 'ts-spotter-rows';
+    PANEL_ROWS.forEach(([label, pick]) => {
+      const value = pick(context);
+      const dt = document.createElement('dt');
+      dt.textContent = label;
+      const dd = document.createElement('dd');
+      dd.textContent = value == null || value === '' ? '\u2014' : String(value);
+      dl.append(dt, dd);
+    });
+    return dl;
+  }
+
+  function openPanel(context) {
     closePanel();
     const panel = document.createElement('aside');
     panel.className = PANEL_CLASS;
@@ -73,20 +126,14 @@
     close.addEventListener('click', closePanel);
     header.append(heading, close);
 
-    const sheet = document.createElement('div');
-    sheet.className = 'ts-spotter-sheet';
-    sheet.textContent = sheetTitle ? 'Sheet: ' + sheetTitle : 'Sheet: (untitled)';
-
     const body = document.createElement('div');
     body.className = 'ts-spotter-body';
     body.textContent = 'Spotter insights will appear here.';
 
-    panel.append(header, sheet, body);
+    panel.append(header, buildRows(context), body);
     document.body.appendChild(panel);
 
-    document.dispatchEvent(
-      new CustomEvent(OPEN_EVENT, { detail: { sheetTitle, url: location.href } })
-    );
+    document.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: context }));
   }
 
   function closePanel() {

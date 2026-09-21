@@ -51,9 +51,23 @@
   color: #666;
   padding: 4px;
 }
-.ts-spotter-panel .ts-spotter-sheet {
+.ts-spotter-panel .ts-spotter-rows {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0;
   font-size: 12px;
+}
+.ts-spotter-panel .ts-spotter-rows dt {
   color: #666;
+  white-space: nowrap;
+}
+.ts-spotter-panel .ts-spotter-rows dd {
+  margin: 0;
+  color: #1a1a1a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+  user-select: text;
 }
 .ts-spotter-panel .ts-spotter-body {
   flex: 1;
