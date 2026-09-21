@@ -315,3 +315,59 @@ describe('/liveboard build-once reuse', () => {
     expect((await res.json() as { error: string }).error).toBe('not_built');
   });
 });
+
+describe('POST /create-liveboard (staged, platform-generic)', () => {
+  const TWB =
+    "<workbook><datasource caption='DS'>" +
+    "<column name='[Sales]' caption='Sales' role='measure' datatype='real'/>" +
+    "<column name='[Region]' caption='Region' role='dimension' datatype='string'/>" +
+    '</datasource></workbook>';
+  const twbB64 = Buffer.from(TWB).toString('base64');
+  const TMDL = "table Sales\n\tcolumn Region\n\t\tdataType: string\n\tcolumn Amount\n\t\tdataType: double\n\tmeasure 'Total' = SUM(Sales[Amount])\n";
+  const realFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  const post = (app: ReturnType<typeof createApp>, body: unknown) =>
+    app.request('/create-liveboard', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(body) });
+
+  test('rejects an unknown platform', async () => {
+    const res = await post(makeApp(), { platform: 'qlik', name: 'X', fileBase64: twbB64 });
+    expect(res.status).toBe(400);
+    expect((await res.json() as { error: string }).error).toBe('unsupported_platform');
+  });
+
+  test('tableau twb: parse+generate stages ok without a cluster', async () => {
+    const res = await post(makeApp(), { platform: 'tableau', name: 'Superstore', fileBase64: twbB64 });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { reused: boolean; stages: { stage: string; status: string }[]; tml: { liveboardTml: string } };
+    expect(body.reused).toBe(false);
+    const byStage = Object.fromEntries(body.stages.map((s) => [s.stage, s.status]));
+    expect(byStage).toMatchObject({ lookup: 'skipped', parse: 'ok', generate: 'ok', import: 'skipped' });
+    expect(body.tml.liveboardTml).toContain('liveboard:');
+  });
+
+  test('powerbi tmdl: parses columns and measures from the model', async () => {
+    const res = await post(makeApp(), { platform: 'powerbi', name: 'Sales Model', model: TMDL });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { columns: { name: string; type: string }[] };
+    const names = body.columns.map((c) => c.name).sort();
+    expect(names).toEqual(['Amount', 'Region', 'Total']);
+    expect(body.columns.find((c) => c.name === 'Total')!.type).toBe('MEASURE');
+    expect(body.columns.find((c) => c.name === 'Region')!.type).toBe('ATTRIBUTE');
+  });
+
+  test('reuse short-circuits with every later stage skipped', async () => {
+    globalThis.fetch = (async (url: string) => {
+      if (String(url).includes('/metadata/search')) {
+        return new Response(JSON.stringify([{ metadata_name: 'Superstore', metadata_id: 'LB-9' }]), { status: 200 });
+      }
+      return new Response('{}', { status: 200 });
+    }) as typeof fetch;
+    const res = await post(makeApp({ tsHost: 'https://ts.example', tsToken: 't' }), { platform: 'tableau', name: 'Superstore' });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { reused: boolean; liveboardId: string; stages: { stage: string; status: string }[] };
+    expect(body.reused).toBe(true);
+    expect(body.liveboardId).toBe('LB-9');
+    expect(body.stages.filter((s) => s.status === 'skipped').map((s) => s.stage)).toEqual(['parse', 'generate', 'import', 'locate']);
+  });
+});

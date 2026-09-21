@@ -5,7 +5,8 @@ import { secureHeaders } from 'hono/secure-headers';
 import { bearerAuth } from './auth';
 import { rateLimit } from './rate-limit';
 import { SessionStore, ValidationError, parseSessionInput, summarize } from './session';
-import { extractTwbXml, parseTableauColumns } from './tableau';
+import { extractTwbXml, parseTableauColumns, type Column } from './tableau';
+import { parseTmdlColumns } from './powerbi';
 import { generateTml, generateWorksheetOnTable, generateLiveboardTml } from './tml';
 import { importTml, findGuid, ensureUser, findMetadataId, mintUserToken, sanitizeUsername, shareMetadata, addUserToGroups } from './thoughtspot';
 import { rowsToCsv } from './csv';
@@ -285,6 +286,122 @@ export function createApp(options: AppOptions) {
     }
 
     return c.json({ name, columns, tml, liveboardId, liveboardUrl, imported, reused: false }, 201);
+  });
+
+  // Platform-generic liveboard creation with per-stage status. Each source
+  // platform declares its modeling language and how to read columns from it.
+  const CONVERTERS: Record<string, { modeling: string; binary: boolean; parse: (data: Uint8Array | string) => Column[] }> = {
+    tableau: { modeling: 'twb', binary: true, parse: (d) => parseTableauColumns(extractTwbXml(d as Uint8Array)) },
+    powerbi: { modeling: 'tmdl', binary: false, parse: (d) => parseTmdlColumns(String(d)) },
+  };
+
+  // Build (or reuse) a liveboard from a platform's model, reporting each stage:
+  // lookup -> parse -> generate -> import -> locate. Body: multipart { platform,
+  // name, file } or JSON { platform, name, fileBase64 | model }. `name` is the
+  // reuse key. Returns { reused, liveboardId, stages: [{stage,status,detail}] }.
+  app.post('/create-liveboard', bodyLimit({ maxSize: options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES }), async (c) => {
+    const ct = c.req.header('content-type') ?? '';
+    let platform = '';
+    let name = '';
+    let filename = '';
+    let bytes: Uint8Array | null = null;
+    let text = '';
+    if (ct.includes('multipart/form-data')) {
+      const form = await c.req.formData();
+      platform = String(form.get('platform') ?? '');
+      name = String(form.get('name') ?? '');
+      const model = form.get('model');
+      if (typeof model === 'string') text = model;
+      const file = form.get('file');
+      if (file && typeof file !== 'string') {
+        bytes = new Uint8Array(await file.arrayBuffer());
+        filename = file.name;
+      }
+    } else if (ct.includes('application/json')) {
+      const b = (await c.req.json().catch(() => ({}))) as Record<string, string>;
+      platform = b.platform ?? '';
+      name = b.name ?? '';
+      filename = b.filename ?? '';
+      text = b.model ?? '';
+      if (b.fileBase64) bytes = Uint8Array.from(atob(b.fileBase64), (ch) => ch.charCodeAt(0));
+    }
+
+    platform = platform.toLowerCase();
+    name = (name || filename.replace(/\.(twbx?|tdsx?|tmdl|zip)$/i, '') || '').slice(0, 80);
+    const conv = CONVERTERS[platform];
+    if (!conv) {
+      return c.json({ error: 'unsupported_platform', detail: `platform must be one of: ${Object.keys(CONVERTERS).join(', ')}` }, 400);
+    }
+    if (!name) return c.json({ error: 'invalid_request', detail: 'name is required (used as the reuse key)' }, 400);
+
+    const tsEnv = options.tsHost && options.tsToken ? { host: options.tsHost, token: options.tsToken } : null;
+    const pinboardUrl = (id: string) => `${options.tsHost!.replace(/\/$/, '')}/#/pinboard/${id}`;
+    const stages: { stage: string; status: 'ok' | 'skipped' | 'failed'; detail?: string }[] = [];
+    const stage = (s: string, status: 'ok' | 'skipped' | 'failed', detail?: string) => {
+      stages.push(detail ? { stage: s, status, detail } : { stage: s, status });
+    };
+
+    // 1. lookup — reuse an existing liveboard by name.
+    if (tsEnv) {
+      const existing = await findMetadataId(tsEnv, name, 'LIVEBOARD');
+      if (existing) {
+        stage('lookup', 'ok', 'found existing');
+        for (const s of ['parse', 'generate', 'import', 'locate']) stage(s, 'skipped');
+        return c.json({ platform, name, reused: true, liveboardId: existing, liveboardUrl: pinboardUrl(existing), stages }, 200);
+      }
+      stage('lookup', 'ok', 'not found');
+    } else {
+      stage('lookup', 'skipped', 'no cluster configured');
+    }
+
+    // 2. parse — model -> columns.
+    const model: Uint8Array | string | null = conv.binary ? bytes : text || (bytes ? new TextDecoder().decode(bytes) : '');
+    if (!model || (conv.binary ? (model as Uint8Array).length === 0 : String(model).length === 0)) {
+      stage('parse', 'failed', `no ${conv.modeling} model provided for ${platform}`);
+      return c.json({ platform, name, reused: false, stages }, 400);
+    }
+    let columns: Column[];
+    try {
+      columns = conv.parse(model);
+    } catch (e) {
+      stage('parse', 'failed', (e as Error).message);
+      return c.json({ platform, name, reused: false, stages }, 422);
+    }
+    if (!columns.length) {
+      stage('parse', 'failed', 'no fields found in the model');
+      return c.json({ platform, name, reused: false, stages }, 422);
+    }
+    stage('parse', 'ok', `${columns.length} columns`);
+
+    // 3. generate — TML.
+    const base = generateTml(name, columns);
+    const liveboardTml = generateLiveboardTml(name, base.worksheetName, columns);
+    const tml = { ...base, liveboardTml };
+    stage('generate', 'ok');
+
+    // 4/5. import + locate.
+    let liveboardId: string | undefined;
+    if (tsEnv) {
+      try {
+        const result = await importTml(tsEnv, [tml.tableTml, tml.worksheetTml, liveboardTml]);
+        stage('import', 'ok');
+        liveboardId = findGuid(result, name);
+        stage('locate', liveboardId ? 'ok' : 'failed', liveboardId ? undefined : 'imported but liveboard GUID not found');
+      } catch (e) {
+        stage('import', 'failed', (e as Error).message);
+        return c.json({ platform, name, reused: false, columns, tml, stages }, 502);
+      }
+    } else {
+      stage('import', 'skipped', 'no cluster configured');
+      stage('locate', 'skipped');
+    }
+
+    return c.json({
+      platform, name, reused: false, columns, tml,
+      liveboardId,
+      liveboardUrl: liveboardId ? pinboardUrl(liveboardId) : undefined,
+      stages,
+    }, liveboardId ? 201 : 200);
   });
 
   app.post('/worksheet', bodyLimit({ maxSize: options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES }), async (c) => {
