@@ -1,4 +1,4 @@
-import { SpotterEmbed, init, AuthType } from '@thoughtspot/visual-embed-sdk';
+import { SpotterEmbed, LiveboardEmbed, init, AuthType } from '@thoughtspot/visual-embed-sdk';
 import { tableauConfig } from '../configs/tableau-config.js';
 import { powerBiConfig } from '../configs/power-bi-config.js';
 import { thoughtSpotConfig } from '../configs/thoughtspot-config.js';
@@ -135,4 +135,26 @@ export class PowerBiSpotterEmbed extends PlatformSpotterEmbed {
   }
 }
 
-export { SpotterEmbed, AuthType, tableauConfig, powerBiConfig, thoughtSpotConfig };
+// Themed Liveboard embed — same platform config/theme as the Spotter embeds,
+// but renders a ThoughtSpot Liveboard (viewConfig takes `liveboardId`).
+export class PlatformLiveboardEmbed extends LiveboardEmbed {
+  constructor(domSelector, config, viewConfig) {
+    super(domSelector, viewConfigFor(config, viewConfig));
+    this.platform = config.platform;
+    this.platformLabel = config.label;
+  }
+}
+
+export class TableauLiveboardEmbed extends PlatformLiveboardEmbed {
+  constructor(domSelector, viewConfig) {
+    super(domSelector, tableauConfig, viewConfig);
+  }
+}
+
+export class PowerBiLiveboardEmbed extends PlatformLiveboardEmbed {
+  constructor(domSelector, viewConfig) {
+    super(domSelector, powerBiConfig, viewConfig);
+  }
+}
+
+export { SpotterEmbed, LiveboardEmbed, AuthType, tableauConfig, powerBiConfig, thoughtSpotConfig };

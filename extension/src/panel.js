@@ -1,8 +1,14 @@
-import { initSpotter, TableauSpotterEmbed, PowerBiSpotterEmbed, thoughtSpotConfig } from '../../ui/spotter-embed/index.js';
+import {
+  initSpotter,
+  TableauSpotterEmbed, PowerBiSpotterEmbed,
+  TableauLiveboardEmbed, PowerBiLiveboardEmbed,
+  thoughtSpotConfig,
+} from '../../ui/spotter-embed/index.js';
 
 const CLOSE_EVENT = 'spotter:close';
 const EMBED_TOKEN = 'spotter:embed-token';
 const EMBEDS = { tableau: TableauSpotterEmbed, powerbi: PowerBiSpotterEmbed };
+const LIVEBOARDS = { tableau: TableauLiveboardEmbed, powerbi: PowerBiLiveboardEmbed };
 const SUBJECT = {
   tableau: (c) => [c.worksheet, c.dashboard || c.workbook],
   powerbi: (c) => [c.visualTitle, c.reportTitle],
@@ -55,6 +61,24 @@ async function main() {
 
   showStatus('Connecting to ThoughtSpot…', false);
   initSpotter({ thoughtSpotHost: thoughtSpotConfig.host, getAuthToken: () => requestEmbedToken(context) });
+
+  // Liveboard mode: the caller built/reused a liveboard and passed its id.
+  if (context.liveboardId) {
+    const LbEmbed = LIVEBOARDS[platform];
+    const lb = new LbEmbed('#spotter', { liveboardId: context.liveboardId });
+    lb.on('load', () => showStatus('', false));
+    lb.on('error', (payload) => {
+      console.error('LiveboardEmbed error', payload);
+      showStatus('The liveboard could not load. Check the host and cluster access.', true);
+    });
+    try {
+      await lb.render();
+    } catch (err) {
+      console.error(err);
+      showStatus('The liveboard could not load.', true);
+    }
+    return;
+  }
 
   // SpotterEmbed with no model never finishes rendering and never errors, so
   // the panel would sit on "Connecting…" forever. Say so instead.

@@ -21,7 +21,9 @@
   const UNDERLYING_CHUNK = 500;
   const CREATE_SESSION = 'spotter:create-session';
   const CREATE_DATASET = 'spotter:create-dataset';
+  const CREATE_LIVEBOARD = 'spotter:create-liveboard';
   const PLATFORM = 'tableau';
+  const LB_BUTTON_CLASS = 'ts-lb-btn';
   const FRAME_CLASS = 'ts-spotter-frame';
   const CLOSE_EVENT = 'spotter:close';
   const EXTENSION_ORIGIN = new URL(chrome.runtime.getURL('')).origin;
@@ -95,13 +97,118 @@
     // so gate on the button itself rather than a marker on the outer div.
     if (textEl.querySelector(':scope > .' + BUTTON_CLASS)) return;
     titleRoot.setAttribute(INJECTED_ATTR, '1');
+    const isOurBtn = (n) => n instanceof Element && (n.classList.contains(BUTTON_CLASS) || n.classList.contains(LB_BUTTON_CLASS));
     const sheetTitle = () =>
       Array.from(textEl.childNodes)
-        .filter((n) => !(n instanceof Element && n.classList.contains(BUTTON_CLASS)))
+        .filter((n) => !isOurBtn(n))
         .map((n) => n.textContent || '')
         .join('')
         .trim();
     textEl.appendChild(buildButton(titleRoot, sheetTitle));
+  }
+
+  // One Liveboard button per embedded Tableau view, pinned to the top-right of
+  // this embed frame (not per-viz like Spotter). Only added in a frame whose URL
+  // is a Tableau view (`/t/<site>/views/<workbook>/<view>`), i.e. the embed.
+  function ensureLiveboardButton() {
+    if (!VIEW_PATH_PATTERN.test(location.pathname)) return;
+    if (document.body.querySelector(':scope > .' + LB_BUTTON_CLASS)) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = LB_BUTTON_CLASS;
+    btn.title = 'Replace this Tableau view with a ThoughtSpot Liveboard';
+    btn.setAttribute('aria-label', 'Open as Liveboard');
+    btn.innerHTML = '<span>◧ Liveboard</span>';
+    btn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const m = location.pathname.match(VIEW_PATH_PATTERN) || [];
+      openLiveboard({
+        site: m[1] || null,
+        workbook: m[2] || null,
+        dashboard: m[3] ? decodeURIComponent(m[3]) : null,
+        url: location.href,
+      });
+    });
+    document.body.appendChild(btn);
+  }
+
+  // Resolve the current view's workbook via the session (same-origin vizportal):
+  // name, LUID, and the download URL for its .twb/.twbx.
+  async function resolveWorkbook(context) {
+    const xsrf = (document.cookie.match(/XSRF-TOKEN=([^;]+)/) || [])[1] || '';
+    const call = (method, params) =>
+      fetch('/vizportal/api/web/v1/' + method, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-XSRF-TOKEN': xsrf },
+        body: JSON.stringify({ method, params }),
+      }).then((r) => r.json());
+    const path = context.workbook && context.dashboard ? context.workbook + '/' + context.dashboard : null;
+    if (!path) throw new Error('could not determine the view path');
+    const view = (await call('getViewByPath', { path })).result;
+    const ref = view && view.workbook;
+    if (!ref) throw new Error('could not resolve the workbook for this view');
+    const wb = (await call('getWorkbook', { id: ref.id })).result || {};
+    return { name: ref.name, luid: ref.luid, downloadUrl: wb.downloadUrl };
+  }
+
+  async function fetchWorkbookBase64(downloadUrl) {
+    const res = await fetch(downloadUrl, { credentials: 'include' });
+    if (!res.ok) {
+      throw new Error(res.status === 403 ? 'you lack download permission on this workbook' : 'workbook download failed (' + res.status + ')');
+    }
+    const buf = new Uint8Array(await res.arrayBuffer());
+    let bin = '';
+    for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+
+  function requestLiveboard(payload) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ type: CREATE_LIVEBOARD, payload }, (res) => {
+        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+        if (!res) return reject(new Error('no response from the extension worker'));
+        resolve(res);
+      });
+    });
+  }
+
+  async function openLiveboard(context) {
+    closePanel();
+    const loading = el('aside', FRAME_CLASS + ' ts-spotter-loading');
+    loading.textContent = 'Preparing the liveboard…';
+    document.body.appendChild(loading);
+
+    const fail = (msg) => {
+      loading.textContent = msg;
+    };
+    try {
+      const wb = await resolveWorkbook(context);
+      const name = (wb.name + ' ' + (wb.luid || '')).trim().slice(0, 80);
+
+      // Build once: ask the backend if it already exists (no download).
+      let res = await requestLiveboard({ platform: PLATFORM, name });
+      if (res.notBuilt) {
+        if (!wb.downloadUrl) return fail('This workbook has no download URL; cannot build the liveboard.');
+        loading.textContent = 'Building the liveboard from the workbook…';
+        const fileBase64 = await fetchWorkbookBase64(wb.downloadUrl);
+        res = await requestLiveboard({ platform: PLATFORM, name, filename: wb.name + '.twbx', fileBase64 });
+      }
+      if (res.error) return fail(res.error);
+      const liveboardId = res.body && res.body.liveboardId;
+      if (!liveboardId) return fail('The liveboard was not created (the cluster may need data configured).');
+
+      loading.remove();
+      const frame = document.createElement('iframe');
+      frame.className = FRAME_CLASS;
+      frame.title = 'Liveboard';
+      frame.src = chrome.runtime.getURL('panel.html') + '#'
+        + encodeURIComponent(JSON.stringify({ ...context, platform: PLATFORM, liveboardId, workbook: wb.name }));
+      document.body.appendChild(frame);
+    } catch (e) {
+      fail((e && e.message) || String(e));
+    }
   }
 
   const PANEL_ROWS = [
@@ -486,6 +593,7 @@
     scanTimer = setTimeout(() => {
       scanTimer = null;
       findTitleTargets(document).forEach(inject);
+      ensureLiveboardButton();
     }, SCAN_DEBOUNCE_MS);
   }
 

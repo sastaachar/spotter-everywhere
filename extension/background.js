@@ -3,6 +3,7 @@ import { devCredentials } from './src/dev-credentials.js';
 
 const CREATE_SESSION = 'spotter:create-session';
 const CREATE_DATASET = 'spotter:create-dataset';
+const CREATE_LIVEBOARD = 'spotter:create-liveboard';
 const EMBED_TOKEN = 'spotter:embed-token';
 
 async function createSession(payload) {
@@ -59,6 +60,32 @@ async function createDataset(payload) {
   return { dataset: body };
 }
 
+// Build-once, reuse-by-name liveboard. Returns { body, notBuilt } — notBuilt
+// means the caller should fetch the platform model and resend it with the file.
+async function createLiveboard(payload) {
+  if (!config.backendUrl) return { error: 'No backend configured (see extension/src/config.js).' };
+  let res;
+  try {
+    res = await fetch(new URL('/create-liveboard', config.backendUrl), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(devCredentials.backendApiKey ? { Authorization: 'Bearer ' + devCredentials.backendApiKey } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    return { error: 'Could not reach the backend: ' + ((err && err.message) || String(err)) };
+  }
+  const body = await res.json().catch(() => null);
+  if (res.status === 404 && body && body.error === 'not_built') return { notBuilt: true };
+  if (!res.ok) {
+    const detail = body && (body.detail || body.error) ? (body.detail || body.error) : 'HTTP ' + res.status;
+    return { error: 'Liveboard build failed: ' + detail, body };
+  }
+  return { body };
+}
+
 // Trusted-auth token for the panel, minted by the backend AS the platform user
 // (JIT-provisioned there). The extension never holds cluster credentials, so
 // this is the only auth path that works on a cluster we have no login for.
@@ -93,6 +120,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message.type === CREATE_DATASET) {
     createDataset(message.payload).then(sendResponse, (err) => sendResponse({ error: String((err && err.message) || err) }));
+    return true;
+  }
+  if (message.type === CREATE_LIVEBOARD) {
+    createLiveboard(message.payload || {}).then(sendResponse, (err) => sendResponse({ error: String((err && err.message) || err) }));
     return true;
   }
   if (message.type === EMBED_TOKEN) {
