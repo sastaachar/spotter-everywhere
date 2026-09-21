@@ -58,6 +58,29 @@ curl -s -D - -o /dev/null https://<cluster>/ | tr ';' '\n' | grep -i frame-ances
 CORS needs nothing: the extension's fetches go through the service worker, which
 is exempt via `host_permissions`.
 
+## Test it on any report
+
+Nothing in the extension is tied to a particular report: the content script
+matches `https://app.powerbi.com/*`, finds visuals by
+`[data-testid="visual-title"]`, and reads the report/page/visual ids out of the
+URL and the report's own queries. Any report the signed-in account can open
+works.
+
+1. `npm start -- "<report url>"` (or paste the URL into the dev browser).
+2. A **Spotter** button appears on every visual title. If none do, run
+   `__spotterProbe()` in the console — it prints what the page actually had.
+3. **Click** one. It reads that visual's rows, loads them into ThoughtSpot,
+   builds a worksheet, and opens Spotter on it. The header shows `model: <name>`
+   once it is ready.
+4. Ask a question.
+5. **Alt+click** instead for the details panel: report/page/visual ids, visual
+   type, filter count, the field mapping, a row preview, and the manual
+   *Create Spotter worksheet* / *Send to Spotter backend* buttons.
+
+To convince yourself the numbers are real rather than cached, compare a total in
+the panel against the visual, then change a filter in Power BI and click again —
+the rows are re-extracted and re-loaded in place every time.
+
 ## Backend, for the data path
 
 The Spotter button opens the panel with no backend. Building a worksheet from a
