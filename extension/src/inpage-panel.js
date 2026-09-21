@@ -9,10 +9,11 @@
 //
 // Runs as a content script, so it shares the isolated world with content.js.
 import { initSpotter, TableauSpotterEmbed, PowerBiSpotterEmbed, thoughtSpotConfig } from '../../ui/spotter-embed/index.js';
-import { tableauConfig, powerBiConfig } from '../../ui/spotter-embed/index.js';
+import { TableauLiveboardEmbed, PowerBiLiveboardEmbed, tableauConfig, powerBiConfig } from '../../ui/spotter-embed/index.js';
 
 const EMBED_TOKEN = 'spotter:embed-token';
 const EMBEDS = { tableau: TableauSpotterEmbed, powerbi: PowerBiSpotterEmbed };
+const LIVEBOARDS = { tableau: TableauLiveboardEmbed, powerbi: PowerBiLiveboardEmbed };
 const CONFIGS = { tableau: tableauConfig, powerbi: powerBiConfig };
 const SUBJECT = {
   tableau: (c) => [c.worksheet, c.dashboard || c.workbook],
@@ -85,6 +86,23 @@ export async function openSpotterPanel(context, hostClass) {
   if (!inited) {
     initSpotter({ thoughtSpotHost: thoughtSpotConfig.host, getAuthToken: () => requestEmbedToken(context) });
     inited = true;
+  }
+
+  // Liveboard mode: the caller built/reused a liveboard and passed its id.
+  if (context.liveboardId) {
+    const lb = new LIVEBOARDS[platform](host.querySelector('.ts-spotter-embed-mount'), { liveboardId: context.liveboardId });
+    lb.on('load', () => showStatus('', false));
+    lb.on('error', (payload) => {
+      console.error('LiveboardEmbed error', payload);
+      showStatus('The liveboard could not load.', true);
+    });
+    try {
+      await lb.render();
+    } catch (err) {
+      console.error(err);
+      showStatus('The liveboard could not load: ' + ((err && err.message) || err), true);
+    }
+    return;
   }
 
   if (!context.worksheetId) {

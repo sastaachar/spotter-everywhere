@@ -222,12 +222,9 @@
       if (!liveboardId) return fail('The liveboard was not created.');
 
       loading.remove();
-      const frame = document.createElement('iframe');
-      frame.className = FRAME_CLASS;
-      frame.title = 'Liveboard';
-      frame.src = chrome.runtime.getURL('panel.html') + '#'
-        + encodeURIComponent(JSON.stringify({ ...context, platform: PLATFORM, liveboardId, workbook: wb.name }));
-      document.body.appendChild(frame);
+      // Mount in the page (https origin) via the in-page panel, so the embed's
+      // postMessage works — same path Spotter uses.
+      window.__spotterPanel.open({ ...context, platform: PLATFORM, liveboardId, workbook: wb.name }, FRAME_CLASS);
     } catch (e) {
       fail((e && e.message) || String(e));
     }
