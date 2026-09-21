@@ -19,6 +19,8 @@
   const REQUEST_TIMEOUT_MS = 30000;
   const UNDERLYING_CAP = 10000;
   const UNDERLYING_CHUNK = 500;
+  const CREATE_SESSION = 'spotter:create-session';
+  const PLATFORM = 'tableau';
 
   const SPARKLE_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true">' +
@@ -207,7 +209,53 @@
     return wrap;
   }
 
-  function underlyingSection(worksheet) {
+  function sessionPayload(context, summary, underlying) {
+    const data = underlying || summary;
+    return {
+      platform: PLATFORM,
+      context: {
+        site: context.site,
+        workbook: context.workbook,
+        dashboard: context.dashboard,
+        isDashboard: context.isDashboard,
+        worksheet: context.worksheet,
+        sheetTitle: context.sheetTitle,
+        zoneId: context.zoneId,
+        url: context.url,
+        dataKind: underlying ? 'underlying' : 'summary',
+        summaryRows: summary.totalRows,
+        filters: JSON.stringify(summary.filters),
+        parameters: JSON.stringify(summary.parameters),
+      },
+      data: { columns: data.columns, rows: data.rows, totalRows: data.totalRows },
+    };
+  }
+
+  function sendSection(context, summary, getUnderlying) {
+    const section = el('div');
+    const send = el('button', 'ts-spotter-more');
+    send.type = 'button';
+    send.textContent = 'Send to Spotter backend';
+    const result = el('div', 'ts-spotter-note');
+    send.addEventListener('click', () => {
+      send.disabled = true;
+      send.textContent = 'Sending…';
+      const payload = sessionPayload(context, summary, getUnderlying());
+      chrome.runtime.sendMessage({ type: CREATE_SESSION, payload }, (res) => {
+        send.disabled = false;
+        send.textContent = 'Send to Spotter backend';
+        if (!res || res.error) {
+          result.textContent = res && res.error ? res.error : 'No response from the extension background.';
+          return;
+        }
+        result.textContent = 'Session ' + res.session.id + ' (' + payload.context.dataKind + ', ' + payload.data.rows.length + ' rows) at ' + res.url;
+      });
+    });
+    section.append(send, result);
+    return section;
+  }
+
+  function underlyingSection(worksheet, onLoaded) {
     const section = el('div');
     const load = el('button', 'ts-spotter-more');
     load.type = 'button';
@@ -218,6 +266,7 @@
       requestWorksheetData(worksheet, 'underlying').then(
         (data) => {
           load.remove();
+          onLoaded(data);
           const capped = data.rows.length >= UNDERLYING_CAP;
           section.append(
             el('div', 'ts-spotter-note', data.rows.length.toLocaleString() + ' rows × ' + data.columns.length + ' columns' + (capped ? ' (API cap reached; the table may be larger)' : '')),
@@ -242,14 +291,19 @@
     body.textContent = 'Loading data for ' + context.worksheet + '…';
     requestWorksheetData(context.worksheet, 'summary').then(
       (data) => {
+        let underlying = null;
         body.textContent = '';
         body.append(
           el('h3', null, 'Shape'),
           buildShape(data),
+          el('h3', null, 'Backend'),
+          sendSection(context, data, () => underlying),
           el('h3', null, 'Summary data (' + data.rows.length + ' rows)'),
           buildTable(data),
           el('h3', null, 'Underlying data'),
-          underlyingSection(context.worksheet)
+          underlyingSection(context.worksheet, (loaded) => {
+            underlying = loaded;
+          })
         );
       },
       (err) => {

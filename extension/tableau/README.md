@@ -42,6 +42,21 @@ table. No network interception, no extra authentication: it rides the session
 the portal already has. Outside the portal page (a bare `:embed=y` view) the
 bridge is absent and the panel says so.
 
+## Sending to the backend
+
+The panel's "Send to Spotter backend" button posts the viz context plus the
+loaded data (underlying rows if you loaded them, otherwise summary rows) to
+`POST /session` on the backend in `../../backend`. Content scripts cannot make
+cross-origin requests, so the post goes through `background.js`, the service
+worker, which reads the backend URL and API key from `chrome.storage.local`.
+Set both on the extension's options page (`chrome://extensions` → Details →
+Extension options). The URL must be https, except `localhost` for development.
+`host_permissions` lists `http://localhost:8787/*` for that; add your deployed
+backend origin there when you have one.
+
+Nothing from Tableau's session (cookies, XSRF token, auth headers) is included
+in the payload.
+
 ## Files
 
 | File | Purpose |
@@ -49,6 +64,8 @@ bridge is absent and the panel says so.
 | `manifest.json` | MV3 manifest, scoped to the one Tableau host, all frames |
 | `content.js` | Finds title elements, injects the button, renders the panel, asks the bridge for data |
 | `bridge.js` | MAIN-world script in the portal page; reads worksheet data through Tableau's JS API |
+| `background.js` | Service worker; posts sessions to the backend with the stored API key |
+| `options.html`, `options.js` | Settings page for backend URL and API key |
 | `content.css` | Button and panel styles, namespaced with `ts-spotter-` |
 
 ## Development loop

@@ -27,6 +27,16 @@ const tableauPayload = {
   },
 };
 
+interface ResponseBody {
+  id: string;
+  platform: string;
+  context: Record<string, unknown>;
+  data?: { columns: unknown; rowCount?: number; totalRows?: number; rows?: unknown };
+  rows?: unknown;
+  error?: string;
+  detail?: string;
+}
+
 function makeApp(overrides: Partial<Parameters<typeof createApp>[0]> = {}) {
   return createApp({ apiKey: KEY, ...overrides });
 }
@@ -34,6 +44,8 @@ function makeApp(overrides: Partial<Parameters<typeof createApp>[0]> = {}) {
 async function post(app: ReturnType<typeof createApp>, body: unknown, headers: Record<string, string> = JSON_HEADERS) {
   return app.request('/session', { method: 'POST', headers, body: typeof body === 'string' ? body : JSON.stringify(body) });
 }
+
+const json = (res: Response) => res.json() as Promise<ResponseBody>;
 
 describe('auth', () => {
   test('rejects a missing bearer token', async () => {
@@ -63,7 +75,7 @@ describe('POST /session', () => {
     const app = makeApp();
     const res = await post(app, tableauPayload);
     expect(res.status).toBe(201);
-    const body = await res.json();
+    const body = await json(res);
     expect(body.platform).toBe('tableau');
     expect(body.context.worksheet).toBe('Total Sales');
     expect(body.data).toEqual({ columns: tableauPayload.data.columns, rowCount: 2, totalRows: 2 });
@@ -76,7 +88,7 @@ describe('POST /session', () => {
   test('accepts another platform with no data', async () => {
     const res = await post(makeApp(), { platform: 'powerbi', context: { report: 'Sales', page: 'Overview' } });
     expect(res.status).toBe(201);
-    const body = await res.json();
+    const body = await json(res);
     expect(body.platform).toBe('powerbi');
     expect(body.data).toBeUndefined();
   });
@@ -84,19 +96,19 @@ describe('POST /session', () => {
   test('rejects invalid JSON', async () => {
     const res = await post(makeApp(), '{not json');
     expect(res.status).toBe(400);
-    expect((await res.json()).error).toBe('invalid_json');
+    expect((await json(res)).error).toBe('invalid_json');
   });
 
   test('rejects a bad platform identifier', async () => {
     const res = await post(makeApp(), { platform: 'Tableau Cloud!', context: {} });
     expect(res.status).toBe(400);
-    expect((await res.json()).error).toBe('invalid_request');
+    expect((await json(res)).error).toBe('invalid_request');
   });
 
   test('rejects rows that do not match the column count', async () => {
     const res = await post(makeApp(), { platform: 'tableau', context: {}, data: { columns: [{ name: 'a' }], rows: [[1, 2]] } });
     expect(res.status).toBe(400);
-    expect((await res.json()).detail).toContain('data.rows[0]');
+    expect((await json(res)).detail).toContain('data.rows[0]');
   });
 
   test('rejects nested context values', async () => {
@@ -113,11 +125,11 @@ describe('POST /session', () => {
 describe('GET and DELETE /session/:id', () => {
   test('round-trips the full session including rows', async () => {
     const app = makeApp();
-    const { id } = await (await post(app, tableauPayload)).json();
+    const { id } = await json(await post(app, tableauPayload));
     const res = await app.request(`/session/${id}`, { headers: AUTH });
     expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.data.rows).toEqual(tableauPayload.data.rows);
+    const body = await json(res);
+    expect(body.data?.rows).toEqual(tableauPayload.data.rows);
     expect(body.context.zoneId).toBe(32);
   });
 
@@ -130,7 +142,7 @@ describe('GET and DELETE /session/:id', () => {
 
   test('deletes a session', async () => {
     const app = makeApp();
-    const { id } = await (await post(app, tableauPayload)).json();
+    const { id } = await json(await post(app, tableauPayload));
     expect((await app.request(`/session/${id}`, { method: 'DELETE', headers: AUTH })).status).toBe(204);
     expect((await app.request(`/session/${id}`, { method: 'DELETE', headers: AUTH })).status).toBe(404);
     expect((await app.request(`/session/${id}`, { headers: AUTH })).status).toBe(404);
@@ -140,7 +152,7 @@ describe('GET and DELETE /session/:id', () => {
     let clock = 1_000_000;
     const store = new SessionStore(1000, 10, () => clock);
     const app = makeApp({ store, now: () => clock });
-    const { id } = await (await post(app, tableauPayload)).json();
+    const { id } = await json(await post(app, tableauPayload));
     expect((await app.request(`/session/${id}`, { headers: AUTH })).status).toBe(200);
     clock += 1001;
     expect((await app.request(`/session/${id}`, { headers: AUTH })).status).toBe(404);
