@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { logger } from 'hono/logger';
 import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
@@ -90,6 +91,7 @@ export function createApp(options: AppOptions) {
     return { host: options.tsHost, token: adminCache.token };
   }
 
+  app.use(logger()); // per-request access log: method, path, status, timing
   app.use(secureHeaders());
   // CORS before auth/rate-limit so the browser's preflight (OPTIONS, no auth
   // header) is answered directly instead of 401/429'd.
