@@ -1,6 +1,6 @@
 import { createApp } from './app';
 
-const DEFAULT_PORT = 8787;
+const DEFAULT_PORT = 8799;
 
 const apiKey = Bun.env.SPOTTER_API_KEY;
 if (!apiKey) {
