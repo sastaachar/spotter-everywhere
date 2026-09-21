@@ -1,11 +1,5 @@
-// Tableau Spotter content script.
-//
-// Target element (from the XPath the author supplied):
-//   //*[@id="title<digits>_<digits>"]/div[1]/div/span/div
-// Tableau generates the numeric part of the id per session, so we match the
-// prefix and shape instead of the literal id.
-
 (() => {
+  // Tableau regenerates the digits in title<digits>_<digits> per session.
   const TITLE_ID_PATTERN = /^title\d+_\d+$/;
   const TITLE_ROOT_SELECTOR = '[id^="title"]';
   const TITLE_TEXT_PATH = ':scope > div:nth-child(1) > div > span > div';
@@ -39,24 +33,19 @@
     btn.setAttribute('aria-label', 'Open Spotter');
     btn.innerHTML = SPARKLE_SVG + '<span>Spotter</span>';
     btn.addEventListener('click', (ev) => {
-      // Keep Tableau from treating this as a title click.
       ev.preventDefault();
       ev.stopPropagation();
       openPanel(sheetTitle());
     });
-    // Tableau attaches mousedown handlers on titles for selection; block those too.
     btn.addEventListener('mousedown', (ev) => ev.stopPropagation());
     return btn;
   }
 
   function inject({ titleRoot, textEl }) {
-    // Gate on the button itself, not a marker on the outer div: during
-    // Tableau's bootstrap the outer div persists while its inner text region
-    // is replaced, which silently removes anything we appended earlier.
+    // Tableau's bootstrap replaces the inner text region after we inject,
+    // so gate on the button itself rather than a marker on the outer div.
     if (textEl.querySelector(':scope > .' + BUTTON_CLASS)) return;
     titleRoot.setAttribute(INJECTED_ATTR, '1');
-    // Read the title fresh on each click (Tableau may rename it), but skip
-    // our own button so its label is not mixed into the sheet name.
     const sheetTitle = () =>
       Array.from(textEl.childNodes)
         .filter((n) => !(n instanceof Element && n.classList.contains(BUTTON_CLASS)))
@@ -95,7 +84,6 @@
     panel.append(header, sheet, body);
     document.body.appendChild(panel);
 
-    // Hook for the rest of the extension (or a page-level listener) to react.
     document.dispatchEvent(
       new CustomEvent(OPEN_EVENT, { detail: { sheetTitle, url: location.href } })
     );
@@ -114,8 +102,6 @@
     }, SCAN_DEBOUNCE_MS);
   }
 
-  // Tableau renders titles lazily and re-creates them on interaction, so watch
-  // the whole document rather than scanning once.
   const observer = new MutationObserver(scheduleScan);
   observer.observe(document.documentElement, { childList: true, subtree: true });
   scheduleScan();
