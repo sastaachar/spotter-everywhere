@@ -14,6 +14,12 @@ describe('exports', () => {
   });
 });
 
+describe('cluster', () => {
+  test('thoughtSpotConfig points at an https host', () => {
+    expect(mod.thoughtSpotConfig.host).toMatch(/^https:\/\/[^/]+$/);
+  });
+});
+
 describe('theme', () => {
   test('colors map onto ThoughtSpot CSS variables', () => {
     const vars = cssVariablesFor(tableauConfig);

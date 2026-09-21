@@ -1,6 +1,7 @@
 import { SpotterEmbed, init, AuthType } from '@thoughtspot/visual-embed-sdk';
 import { tableauConfig } from '../configs/tableau-config.js';
 import { powerBiConfig } from '../configs/power-bi-config.js';
+import { thoughtSpotConfig } from '../configs/thoughtspot-config.js';
 
 /**
  * @typedef {Object} PlatformColors
@@ -75,10 +76,11 @@ export function viewConfigFor(config, viewConfig = {}) {
 
 /**
  * init() pinned to cookieless trusted auth; the token comes from our backend.
- * @param {Omit<import('@thoughtspot/visual-embed-sdk').EmbedConfig, 'authType'> & { getAuthToken: () => Promise<string> }} config
+ * thoughtSpotHost defaults to the configured cluster.
+ * @param {Omit<import('@thoughtspot/visual-embed-sdk').EmbedConfig, 'authType' | 'thoughtSpotHost'> & { thoughtSpotHost?: string, getAuthToken: () => Promise<string> }} config
  */
 export function initSpotter(config) {
-  return init({ ...config, authType: AuthType.TrustedAuthTokenCookieless });
+  return init({ thoughtSpotHost: thoughtSpotConfig.host, ...config, authType: AuthType.TrustedAuthTokenCookieless });
 }
 
 export class PlatformSpotterEmbed extends SpotterEmbed {
@@ -106,4 +108,4 @@ export class PowerBiSpotterEmbed extends PlatformSpotterEmbed {
   }
 }
 
-export { SpotterEmbed, AuthType, tableauConfig, powerBiConfig };
+export { SpotterEmbed, AuthType, tableauConfig, powerBiConfig, thoughtSpotConfig };

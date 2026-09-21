@@ -9,7 +9,7 @@ changes: constructor, `render()`, events and view config are the SDK's.
 import { initSpotter, TableauSpotterEmbed } from '@spotter-everywhere/spotter-embed';
 
 initSpotter({
-  thoughtSpotHost: 'https://your-cluster.thoughtspot.cloud',
+  // thoughtSpotHost defaults to ../configs/thoughtspot-config.js; pass one to override
   getAuthToken: () => fetch(backend + '/token', { headers }).then((r) => r.text()),
 });
 
@@ -33,6 +33,8 @@ config. No selectors, no data logic.
 | `colors` | primary/hover/active, secondary, background, surface, text, font. Mapped to `--ts-var-*` by `cssVariablesFor` |
 | `cssVariables` | raw `--ts-var-*` overrides that win over the mapped colours |
 | `viewConfig` | `SpotterEmbedViewConfig` defaults for that platform |
+
+`thoughtspot-config.js` holds the cluster host `initSpotter` uses by default.
 
 ## Develop
 
