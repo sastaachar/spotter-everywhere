@@ -7,41 +7,71 @@
   "host_permissions": [
     "https://prod-in-a.online.tableau.com/*",
     "https://app.powerbi.com/*",
+    "https://spotter-everywhere.thoughtspotdev.cloud/*",
     "https://jm-saas-2.internal.thoughtspot.dev/*",
     "http://localhost:8799/*"
   ],
-  "background": { "service_worker": "background.js", "type": "module" },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
   "web_accessible_resources": [
     {
-      "resources": ["panel.html", "dist/*"],
-      "matches": ["https://prod-in-a.online.tableau.com/*", "https://app.powerbi.com/*"]
+      "resources": [
+        "panel.html",
+        "dist/*"
+      ],
+      "matches": [
+        "https://prod-in-a.online.tableau.com/*",
+        "https://app.powerbi.com/*"
+      ]
     }
   ],
   "content_scripts": [
     {
-      "matches": ["https://prod-in-a.online.tableau.com/*"],
-      "js": ["platforms/tableau/content.js"],
-      "css": ["platforms/tableau/content.css"],
+      "matches": [
+        "https://prod-in-a.online.tableau.com/*"
+      ],
+      "js": [
+        "platforms/tableau/content.js"
+      ],
+      "css": [
+        "platforms/tableau/content.css"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     },
     {
-      "matches": ["https://prod-in-a.online.tableau.com/*"],
-      "js": ["platforms/tableau/bridge.js"],
+      "matches": [
+        "https://prod-in-a.online.tableau.com/*"
+      ],
+      "js": [
+        "platforms/tableau/bridge.js"
+      ],
       "run_at": "document_idle",
       "all_frames": false,
       "world": "MAIN"
     },
     {
-      "matches": ["https://app.powerbi.com/*"],
-      "js": ["platforms/powerbi/content.js"],
-      "css": ["platforms/powerbi/content.css"],
+      "matches": [
+        "https://app.powerbi.com/*"
+      ],
+      "js": [
+        "platforms/powerbi/content.js"
+      ],
+      "css": [
+        "platforms/powerbi/content.css"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     },
     {
-      "matches": ["https://app.powerbi.com/*"],
-      "js": ["platforms/powerbi/bridge.js"],
+      "matches": [
+        "https://app.powerbi.com/*"
+      ],
+      "js": [
+        "platforms/powerbi/bridge.js"
+      ],
       "run_at": "document_start",
       "all_frames": false,
       "world": "MAIN"
