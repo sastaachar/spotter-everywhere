@@ -107,7 +107,12 @@ export function initSpotter({ username, password, ...config }) {
   const thoughtSpotHost = config.thoughtSpotHost || thoughtSpotConfig.host;
   const getAuthToken = config.getAuthToken || (username && password ? () => mintToken({ host: thoughtSpotHost, username, password }) : undefined);
   if (!getAuthToken) throw new Error('initSpotter needs getAuthToken, or username and password');
-  return init({ ...config, thoughtSpotHost, getAuthToken, authType: AuthType.TrustedAuthTokenCookieless });
+  // In a chrome-extension panel the SDK derives hostAppUrl from location.host,
+  // which is the bare extension id (no scheme) — an invalid URL. Force a proper
+  // one via additionalFlags. Caller can override.
+  const origin = (typeof location !== 'undefined' && location.origin) || thoughtSpotHost;
+  const additionalFlags = { hostAppUrl: origin, ...(config.additionalFlags || {}) };
+  return init({ ...config, thoughtSpotHost, getAuthToken, additionalFlags, authType: AuthType.TrustedAuthTokenCookieless });
 }
 
 export class PlatformSpotterEmbed extends SpotterEmbed {
