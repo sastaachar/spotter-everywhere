@@ -6,7 +6,7 @@ import { bearerAuth } from './auth';
 import { rateLimit } from './rate-limit';
 import { SessionStore, ValidationError, parseSessionInput, summarize } from './session';
 import { extractTwbXml, parseTableauColumns } from './tableau';
-import { generateTml, generateWorksheetOnTable } from './tml';
+import { generateTml, generateWorksheetOnTable, generateLiveboardTml } from './tml';
 import { importTml, findGuid, ensureUser, findMetadataId, mintUserToken, sanitizeUsername, shareMetadata, addUserToGroups } from './thoughtspot';
 import { rowsToCsv } from './csv';
 import { uploadCsvDataset, deleteTable } from './userdata';
@@ -162,6 +162,105 @@ export function createApp(options: AppOptions) {
   // { userid, platform, filename, fileBase64 }. Returns the worksheet the
   // extension can point Spotter at (imported GUID + searchUrl when TS is
   // configured, otherwise the generated schema + TML to import).
+  // Convert a Tableau .twb/.twbx to ThoughtSpot TML and return it — no cluster
+  // needed, no import, no user provisioned. Body: multipart with a `file`, or
+  // JSON { filename?, fileBase64 }. Returns the table + worksheet TML text.
+  app.post('/twb-to-tml', bodyLimit({ maxSize: options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES }), async (c) => {
+    const ct = c.req.header('content-type') ?? '';
+    let filename = '';
+    let bytes: Uint8Array | null = null;
+    if (ct.includes('multipart/form-data')) {
+      const form = await c.req.formData();
+      const file = form.get('file');
+      if (file && typeof file !== 'string') {
+        bytes = new Uint8Array(await file.arrayBuffer());
+        filename = file.name;
+      }
+    } else if (ct.includes('application/json')) {
+      const b = (await c.req.json().catch(() => ({}))) as Record<string, string>;
+      filename = b.filename ?? '';
+      if (b.fileBase64) bytes = Uint8Array.from(atob(b.fileBase64), (ch) => ch.charCodeAt(0));
+    }
+    if (!bytes || bytes.length === 0) {
+      return c.json({ error: 'invalid_request', detail: 'no .twb/.twbx file provided' }, 400);
+    }
+
+    let columns;
+    try {
+      columns = parseTableauColumns(extractTwbXml(bytes));
+    } catch (e) {
+      return c.json({ error: 'parse_failed', detail: (e as Error).message }, 422);
+    }
+    if (!columns.length) return c.json({ error: 'no_columns', detail: 'no fields found in the workbook' }, 422);
+
+    const name = (filename || 'workbook').replace(/\.(twbx?|tdsx?)$/i, '').slice(0, 80);
+    const tml = generateTml(name, columns);
+
+    if (c.req.query('format') === 'text') {
+      return c.text(`${tml.tableTml}\n---\n${tml.worksheetTml}\n`, 200, { 'Content-Type': 'text/yaml; charset=utf-8' });
+    }
+    return c.json({ name, columns, tml }, 200);
+  });
+
+  // Turn a Tableau .twb/.twbx into a ThoughtSpot Liveboard: a table + worksheet
+  // plus a liveboard (table viz + a column chart per measure). Returns the TML;
+  // when TS_HOST/TS_TOKEN are set it also imports table -> worksheet -> liveboard
+  // and returns the liveboard id. Body: multipart `file`, or JSON { filename?, fileBase64 }.
+  app.post('/liveboard', bodyLimit({ maxSize: options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES }), async (c) => {
+    const ct = c.req.header('content-type') ?? '';
+    let filename = '';
+    let bytes: Uint8Array | null = null;
+    if (ct.includes('multipart/form-data')) {
+      const form = await c.req.formData();
+      const file = form.get('file');
+      if (file && typeof file !== 'string') {
+        bytes = new Uint8Array(await file.arrayBuffer());
+        filename = file.name;
+      }
+    } else if (ct.includes('application/json')) {
+      const b = (await c.req.json().catch(() => ({}))) as Record<string, string>;
+      filename = b.filename ?? '';
+      if (b.fileBase64) bytes = Uint8Array.from(atob(b.fileBase64), (ch) => ch.charCodeAt(0));
+    }
+    if (!bytes || bytes.length === 0) {
+      return c.json({ error: 'invalid_request', detail: 'no .twb/.twbx file provided' }, 400);
+    }
+
+    let columns;
+    try {
+      columns = parseTableauColumns(extractTwbXml(bytes));
+    } catch (e) {
+      return c.json({ error: 'parse_failed', detail: (e as Error).message }, 422);
+    }
+    if (!columns.length) return c.json({ error: 'no_columns', detail: 'no fields found in the workbook' }, 422);
+
+    const name = (filename || 'workbook').replace(/\.(twbx?|tdsx?)$/i, '').slice(0, 80);
+    const base = generateTml(name, columns);
+    const liveboardTml = generateLiveboardTml(name, base.worksheetName, columns);
+    const tml = { ...base, liveboardTml };
+
+    if (c.req.query('format') === 'text') {
+      return c.text([tml.tableTml, tml.worksheetTml, liveboardTml].join('\n---\n') + '\n', 200, {
+        'Content-Type': 'text/yaml; charset=utf-8',
+      });
+    }
+
+    let liveboardId: string | undefined;
+    let liveboardUrl: string | undefined;
+    let imported = false;
+    if (options.tsHost && options.tsToken) {
+      const tsEnv = { host: options.tsHost, token: options.tsToken };
+      const result = await importTml(tsEnv, [tml.tableTml, tml.worksheetTml, liveboardTml]);
+      liveboardId = findGuid(result, name);
+      if (liveboardId) {
+        imported = true;
+        liveboardUrl = `${options.tsHost.replace(/\/$/, '')}/#/pinboard/${liveboardId}`;
+      }
+    }
+
+    return c.json({ name, columns, tml, liveboardId, liveboardUrl, imported }, 201);
+  });
+
   app.post('/worksheet', bodyLimit({ maxSize: options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES }), async (c) => {
     const ct = c.req.header('content-type') ?? '';
     let userid = '';

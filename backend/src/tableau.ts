@@ -31,7 +31,19 @@ const clean = (s: string): string => s.replace(/^\[|\]$/g, '').trim();
 const idOf = (name: string, i: number): string =>
   name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || `col_${i}`;
 
-/** Pull the user-facing fields (dimensions/measures) out of a Tableau XML doc. */
+const NUMERIC = new Set(['integer', 'real']);
+// A name that is safe as a ThoughtSpot `[token]`: no brackets/parens/colons that
+// would break the search query. Formula and calc/param names fail this.
+const SAFE_NAME = /^[^[\]()::%]+$/;
+const looksLikeId = (n: string): boolean => /(^|[\s_])id$/i.test(n) || /postal\s*code/i.test(n);
+
+/**
+ * Pull the real, user-facing physical fields out of a Tableau XML doc. Drops
+ * calculated fields, parameters, hidden and Tableau-internal columns, and
+ * anything whose name would not survive a ThoughtSpot search query. Numeric
+ * fields become measures (unless they look like ids), everything else an
+ * attribute — the `role` flag alone is unreliable in real workbooks.
+ */
 export function parseTableauColumns(xml: string): Column[] {
   const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
   const doc = parser.parse(xml);
@@ -45,20 +57,26 @@ export function parseTableauColumns(xml: string): Column[] {
       if (key === 'column') {
         const cols = Array.isArray(value) ? value : [value];
         for (const raw of cols) {
-          const c = raw as Record<string, string>;
+          if (!raw || typeof raw !== 'object') continue;
+          const c = raw as Record<string, unknown>;
           const rawName = String(c['@_name'] ?? '');
           if (rawName.startsWith('[:')) continue; // Tableau-internal
-          const name = c['@_caption'] || (rawName ? clean(rawName) : '');
+          if ('calculation' in c) continue; // calculated field
+          if (c['@_param-domain-type'] != null) continue; // parameter
+          if (String(c['@_hidden']).toLowerCase() === 'true') continue;
+          if (/^Calculation_/.test(rawName)) continue;
+
+          const name = String(c['@_caption'] ?? '') || (rawName ? clean(rawName) : '');
           if (!name || seen.has(name)) continue;
+          if (!SAFE_NAME.test(name)) continue; // formula/label/derived name
+          if (/\slabel$/i.test(name)) continue;
           seen.add(name);
-          const role = (c['@_role'] ?? '').toLowerCase();
-          const dt = (c['@_datatype'] ?? '').toLowerCase();
-          out.push({
-            id: idOf(name, out.length),
-            name,
-            type: role === 'measure' ? 'MEASURE' : 'ATTRIBUTE',
-            dataType: DATATYPE[dt] ?? 'VARCHAR',
-          });
+
+          const dt = String(c['@_datatype'] ?? '').toLowerCase();
+          const role = String(c['@_role'] ?? '').toLowerCase();
+          const numeric = NUMERIC.has(dt);
+          const type: Column['type'] = (numeric && !looksLikeId(name)) || role === 'measure' ? 'MEASURE' : 'ATTRIBUTE';
+          out.push({ id: idOf(name, out.length), name, type, dataType: DATATYPE[dt] ?? 'VARCHAR' });
         }
       } else if (typeof value === 'object') {
         visit(value);
