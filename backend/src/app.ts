@@ -75,12 +75,17 @@ export function createApp(options: AppOptions) {
   let adminCache = { token: '', exp: 0 };
   async function adminEnv() {
     if (!options.tsHost) return null;
-    if (options.tsToken) return { host: options.tsHost, token: options.tsToken };
+    if (options.tsToken) {
+      console.log('[admin] using static TS_TOKEN (set TS_TOKEN empty to mint from the secret key instead)');
+      return { host: options.tsHost, token: options.tsToken };
+    }
     if (!options.tsSecretKey) return null;
     if (!adminCache.token || Date.now() >= adminCache.exp) {
       const validitySec = 3600;
+      console.log(`[admin] minting admin token as "${adminUser}" from the secret key against ${options.tsHost}`);
       const token = await mintUserToken(options.tsHost, adminUser, options.tsSecretKey, { validitySec });
       adminCache = { token, exp: Date.now() + (validitySec - 120) * 1000 };
+      console.log(`[admin] minted admin token (${token.slice(0, 6)}…, ${token.length} chars)`);
     }
     return { host: options.tsHost, token: adminCache.token };
   }
