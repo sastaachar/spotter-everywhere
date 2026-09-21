@@ -179,6 +179,65 @@ describe('SessionStore', () => {
   });
 });
 
+describe('GET /token', () => {
+  const creds = { host: 'https://ts.example', username: 'svc', password: 'pw' };
+
+  function fakeFetch(status: number, body: unknown): typeof fetch {
+    const impl = async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      fakeFetch.calls.push({ url: String(input), init });
+      return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+    };
+    return impl as typeof fetch;
+  }
+  fakeFetch.calls = [] as { url: string; init?: RequestInit }[];
+
+  test('503 when ThoughtSpot is not configured', async () => {
+    const res = await makeApp().request('/token', { headers: AUTH });
+    expect(res.status).toBe(503);
+    expect((await json(res)).error).toBe('thoughtspot_not_configured');
+  });
+
+  test('exchanges the configured credentials for a token', async () => {
+    fakeFetch.calls.length = 0;
+    const app = makeApp({
+      thoughtSpot: creds,
+      fetchImpl: fakeFetch(200, { token: 'tok-1', expiration_time_in_millis: 1_700_000_000_000, valid_for_username: 'svc' }),
+    });
+    const res = await app.request('/token', { headers: AUTH });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { token: string; expiresAt: string; host: string };
+    expect(body.token).toBe('tok-1');
+    expect(body.host).toBe(creds.host);
+    expect(body.expiresAt).toBe(new Date(1_700_000_000_000).toISOString());
+    expect(fakeFetch.calls[0]?.url).toBe('https://ts.example/api/rest/2.0/auth/token/full');
+    const sent = JSON.parse(String(fakeFetch.calls[0]?.init?.body)) as Record<string, unknown>;
+    expect(sent.username).toBe('svc');
+    expect(sent.password).toBe('pw');
+    expect(sent.validity_time_in_sec).toBe(300);
+  });
+
+  test('502 with a generic error when ThoughtSpot rejects the credentials', async () => {
+    const app = makeApp({ thoughtSpot: creds, fetchImpl: fakeFetch(401, { error: { message: 'bad password' } }) });
+    const res = await app.request('/token', { headers: AUTH });
+    expect(res.status).toBe(502);
+    const body = await json(res);
+    expect(body.error).toBe('thoughtspot_auth_failed');
+    expect(JSON.stringify(body)).not.toContain('bad password');
+  });
+
+  test('502 when the response has no token, and rejects a non-https host', async () => {
+    const app = makeApp({ thoughtSpot: creds, fetchImpl: fakeFetch(200, {}) });
+    expect((await app.request('/token', { headers: AUTH })).status).toBe(502);
+    const plain = makeApp({ thoughtSpot: { ...creds, host: 'http://ts.example' }, fetchImpl: fakeFetch(200, { token: 'x' }) });
+    expect((await plain.request('/token', { headers: AUTH })).status).toBe(502);
+  });
+
+  test('still requires the API key', async () => {
+    const app = makeApp({ thoughtSpot: creds, fetchImpl: fakeFetch(200, { token: 'x' }) });
+    expect((await app.request('/token')).status).toBe(401);
+  });
+});
+
 describe('rate limit', () => {
   test('returns 429 once the window is exhausted and resets after it', async () => {
     let clock = 0;

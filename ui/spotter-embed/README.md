@@ -10,7 +10,7 @@ import { initSpotter, TableauSpotterEmbed } from '@spotter-everywhere/spotter-em
 
 initSpotter({
   // thoughtSpotHost defaults to ../configs/thoughtspot-config.js; pass one to override
-  getAuthToken: () => fetch(backend + '/token', { headers }).then((r) => r.text()),
+  getAuthToken: () => fetch(backend + '/token', { headers }).then((r) => r.json()).then((b) => b.token),
 });
 
 const embed = new TableauSpotterEmbed('#spotter', { worksheetId: '<thoughtspot model id>' });

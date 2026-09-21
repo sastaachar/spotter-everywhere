@@ -4,6 +4,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import { bearerAuth } from './auth';
 import { rateLimit } from './rate-limit';
 import { SessionStore, ValidationError, parseSessionInput, summarize } from './session';
+import { ThoughtSpotAuthError, mintToken, type ThoughtSpotCredentials } from './thoughtspot';
 
 export interface AppOptions {
   apiKey: string;
@@ -11,6 +12,8 @@ export interface AppOptions {
   maxBodyBytes?: number;
   rateLimitPerMinute?: number;
   now?: () => number;
+  thoughtSpot?: ThoughtSpotCredentials;
+  fetchImpl?: typeof fetch;
 }
 
 export const DEFAULT_MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -56,10 +59,20 @@ export function createApp(options: AppOptions) {
     return c.body(null, 204);
   });
 
+  app.get('/token', async (c) => {
+    if (!options.thoughtSpot) return c.json({ error: 'thoughtspot_not_configured' }, 503);
+    const token = await mintToken(options.thoughtSpot, options.fetchImpl);
+    return c.json({ token: token.token, expiresAt: token.expiresAt, host: options.thoughtSpot.host });
+  });
+
   app.notFound((c) => c.json({ error: 'not_found' }, 404));
 
   app.onError((err, c) => {
     if (err instanceof ValidationError) return c.json({ error: 'invalid_request', detail: err.message }, 400);
+    if (err instanceof ThoughtSpotAuthError) {
+      console.error('thoughtspot token error:', err.message);
+      return c.json({ error: 'thoughtspot_auth_failed' }, 502);
+    }
     if ('status' in err && err.status === 413) return c.json({ error: 'payload_too_large' }, 413);
     console.error(err);
     return c.json({ error: 'internal_error' }, 500);

@@ -9,7 +9,15 @@ if (!apiKey) {
 }
 
 const port = Number(Bun.env.PORT ?? DEFAULT_PORT);
-const app = createApp({ apiKey });
+
+const { THOUGHTSPOT_HOST, THOUGHTSPOT_USERNAME, THOUGHTSPOT_PASSWORD } = Bun.env;
+const thoughtSpot =
+  THOUGHTSPOT_HOST && THOUGHTSPOT_USERNAME && THOUGHTSPOT_PASSWORD
+    ? { host: THOUGHTSPOT_HOST, username: THOUGHTSPOT_USERNAME, password: THOUGHTSPOT_PASSWORD }
+    : undefined;
+if (!thoughtSpot) console.warn('ThoughtSpot credentials not set; GET /token will return 503.');
+
+const app = createApp({ apiKey, thoughtSpot });
 
 export default { port, fetch: app.fetch };
 

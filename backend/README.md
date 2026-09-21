@@ -56,6 +56,19 @@ Returns the full session including rows, or `404` once it has expired.
 
 Removes a session. `204` on success.
 
+### `GET /token`
+
+Exchanges the ThoughtSpot username and password from the environment for a
+cookieless trusted-auth token via `POST /api/rest/2.0/auth/token/full` on
+`THOUGHTSPOT_HOST`, valid for five minutes. Returns
+`{ "token", "expiresAt", "host" }`. This is what the SDK's `getAuthToken` calls.
+`503 thoughtspot_not_configured` when the env vars are missing,
+`502 thoughtspot_auth_failed` when the cluster refuses; the cluster's own error
+text is logged server-side only.
+
+The username/password exchange is a development shortcut. Production should
+mint with the cluster's trusted-auth secret key instead.
+
 ## Errors
 
 `{ "error": "<code>" }` with `invalid_json`, `invalid_request` (plus a
