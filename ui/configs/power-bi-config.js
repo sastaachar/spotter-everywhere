@@ -1,0 +1,20 @@
+export const powerBiConfig = {
+  platform: 'powerbi',
+  label: 'Power BI',
+  accent: '#2770ef',
+  subject: (c) => c.visualTitle || c.visualId,
+  contextRows: [
+    ['Report', 'reportTitle'],
+    ['Report id', 'reportId'],
+    ['Page', 'pageName'],
+    ['Visual title', 'visualTitle'],
+    ['Visual id', (c) => c.visualId || (c.layoutError ? 'layout error: ' + c.layoutError : null)],
+    ['Visual type', 'visualType'],
+    ['Filters', 'filterCount'],
+    ['Tab order', 'tabOrder'],
+    ['Position', 'position'],
+    ['Workspace', 'workspace'],
+  ],
+  dataKinds: ['summary'],
+  underlyingCap: 10000,
+};
