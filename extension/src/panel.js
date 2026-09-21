@@ -44,8 +44,13 @@ async function main() {
   showStatus('Connecting to ThoughtSpot…', false);
   initSpotter({ thoughtSpotHost: thoughtSpotConfig.host, username, password });
 
-  const viewConfig = {};
-  if (context.worksheetId) viewConfig.worksheetId = context.worksheetId;
+  // SpotterEmbed with no model never finishes rendering and never errors, so
+  // the panel would sit on "Connecting…" forever. Say so instead.
+  if (!context.worksheetId) {
+    showStatus('No ThoughtSpot model for this view yet. Alt+click the Spotter button and use "Create Spotter worksheet" first.', true);
+    return;
+  }
+  const viewConfig = { worksheetId: context.worksheetId };
   const embed = new Embed('#spotter', viewConfig);
   embed.on('load', () => showStatus('', false));
   embed.on('error', (payload) => {
