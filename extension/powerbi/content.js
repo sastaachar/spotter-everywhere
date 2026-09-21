@@ -317,11 +317,24 @@
 
     const body = document.createElement('div');
     body.className = 'ts-spotter-body';
-    body.textContent = context.visualId ? 'Loading data\u2026' : 'No visual id \u2014 cannot query this visual.';
+
+    // Spotter runs in an extension page: MV3 forbids remote scripts, and Power
+    // BI's CSP would block framing the ThoughtSpot host from this document.
+    const spotter = document.createElement('iframe');
+    spotter.className = 'ts-spotter-frame';
+    spotter.src = chrome.runtime.getURL('panel.html');
+
+    const table = document.createElement('div');
+    table.className = 'ts-spotter-table-view';
+    table.textContent = context.visualId ? 'Loading data\u2026' : 'No visual id \u2014 cannot query this visual.';
+    table.hidden = true;
+
+    body.append(spotter, table);
 
     let lastResult = null;
-    panel.append(header, buildRows(context), body, buildSendButton(context, () => lastResult));
-    if (context.visualId) loadData(body, context.visualId, (r) => { lastResult = r; });
+    const tabs = buildTabs(spotter, table);
+    panel.append(header, tabs, buildRows(context), body, buildSendButton(context, () => lastResult));
+    if (context.visualId) loadData(table, context.visualId, (r) => { lastResult = r; });
     document.body.appendChild(panel);
 
     document.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: context }));
@@ -406,6 +419,26 @@
         totalRows: result.rowCount,
       } : undefined,
     };
+  }
+
+  function buildTabs(spotter, table) {
+    const wrap = document.createElement('div');
+    wrap.className = 'ts-spotter-tabs';
+    const views = [['Spotter', spotter], ['Data', table]];
+    const buttons = views.map(([label, el]) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'ts-spotter-tab';
+      b.textContent = label;
+      b.addEventListener('click', () => {
+        views.forEach(([, other]) => { other.hidden = other !== el; });
+        buttons.forEach((other) => other.classList.toggle('is-active', other === b));
+      });
+      wrap.appendChild(b);
+      return b;
+    });
+    buttons[0].classList.add('is-active');
+    return wrap;
   }
 
   function buildSendButton(context, getResult) {
