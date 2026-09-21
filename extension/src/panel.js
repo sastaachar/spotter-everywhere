@@ -37,6 +37,8 @@ document.getElementById('close').addEventListener('click', () => {
 
 // The backend mints the trusted-auth token as this platform user; the panel
 // never holds cluster credentials. Same userid as createDataset uses.
+// Returns { token, host }: the token AND the cluster host it was minted for.
+// The embed MUST use that same host or the cluster rejects the token (unauth).
 function requestEmbedToken(context) {
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({
@@ -46,7 +48,7 @@ function requestEmbedToken(context) {
       if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
       if (!res) return reject(new Error('No response from the extension worker.'));
       if (res.error) return reject(new Error(res.error));
-      resolve(res.token);
+      resolve({ token: res.token, host: res.host });
     });
   });
 }
@@ -60,7 +62,22 @@ async function main() {
   subject.textContent = subjectParts.filter(Boolean).join(' · ');
 
   showStatus('Connecting to ThoughtSpot…', false);
-  initSpotter({ thoughtSpotHost: thoughtSpotConfig.host, getAuthToken: () => requestEmbedToken(context) });
+  // Mint once up front to learn the host the token is valid for; then embed
+  // against THAT host. A getAuthToken re-mints on the SDK's refresh.
+  let first;
+  try {
+    first = await requestEmbedToken(context);
+  } catch (err) {
+    showStatus('Could not authenticate: ' + err.message, true);
+    return;
+  }
+  const host = first.host || thoughtSpotConfig.host;
+  let pending = first.token;
+  const getAuthToken = async () => {
+    if (pending) { const t = pending; pending = null; return t; }
+    return (await requestEmbedToken(context)).token;
+  };
+  initSpotter({ thoughtSpotHost: host, getAuthToken });
 
   // Liveboard mode: the caller built/reused a liveboard and passed its id.
   if (context.liveboardId) {

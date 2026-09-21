@@ -92,7 +92,21 @@
     return { username: m ? m[0] : null };
   }
 
-  const HANDLERS = { summary: describe, underlying, user: () => Promise.resolve(getUserInfo()) };
+  // List the active dashboard's worksheets (names + a rough row count) so the
+  // liveboard flow can pick which one's data to load.
+  async function worksheets() {
+    const vm = window.tableau && window.tableau.VizManager;
+    const vizs = vm ? vm.getVizs() : [];
+    const out = [];
+    for (const viz of vizs) {
+      const sheet = viz.getWorkbook().getActiveSheet();
+      const list = sheet.getSheetType() === 'dashboard' ? sheet.getWorksheets() : [sheet];
+      for (const w of list) out.push({ name: w.getName() });
+    }
+    return { worksheets: out };
+  }
+
+  const HANDLERS = { summary: describe, underlying, worksheets, user: () => Promise.resolve(getUserInfo()) };
 
   window.addEventListener('message', (ev) => {
     if (ev.origin !== location.origin || !ev.data || ev.data.type !== REQUEST) return;

@@ -12,6 +12,9 @@ export interface GeneratedTml {
 
 const q = (s: string): string => s.replace(/"/g, '\\"');
 
+const DB_NAME = 'spotter_everywhere';
+const SCHEMA_NAME = 'falcon_default_schema';
+
 export function generateTml(name: string, columns: Column[]): GeneratedTml {
   const tableName = `${name} Table`;
 
@@ -24,11 +27,25 @@ export function generateTml(name: string, columns: Column[]): GeneratedTml {
     `        data_type: ${c.dataType}`,
   ].join('\n')).join('\n');
 
-  const tableTml = ['table:', `  name: "${q(tableName)}"`, '  columns:', tableCols, ''].join('\n');
+  // Falcon tables require db + schema; without them import fails with
+  // "db cannot be left empty for falcon table".
+  const tableTml = [
+    'table:',
+    `  name: "${q(tableName)}"`,
+    `  db: ${DB_NAME}`,
+    `  schema: ${SCHEMA_NAME}`,
+    `  db_table: ${slugId(tableName)}`,
+    '  columns:',
+    tableCols,
+    '',
+  ].join('\n');
 
+  // Worksheet columns reference the table column by NAME (<Table>::<Column
+  // Name>), not by db_column_name — using the db name fails validation with
+  // "columns use invalid table columns".
   const wsCols = columns.map((c) => [
     `    - name: "${q(c.name)}"`,
-    `      column_id: "${q(tableName)}::${c.id}"`,
+    `      column_id: "${q(tableName)}::${q(c.name)}"`,
     '      properties:',
     `        column_type: ${c.type}`,
   ].join('\n')).join('\n');
@@ -45,6 +62,9 @@ export function generateTml(name: string, columns: Column[]): GeneratedTml {
 
   return { tableName, worksheetName: name, tableTml, worksheetTml };
 }
+
+const slugId = (s: string): string =>
+  s.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'table';
 
 // Build a Liveboard TML on top of a worksheet: a table viz of everything, plus
 // one column-chart per measure broken down by the first attribute. TML shape is

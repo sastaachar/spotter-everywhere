@@ -1,6 +1,6 @@
 import { createApp } from './app';
 
-const DEFAULT_PORT = 8787;
+const DEFAULT_PORT = 8799;
 
 const apiKey = Bun.env.SPOTTER_API_KEY;
 if (!apiKey) {
@@ -17,6 +17,7 @@ const app = createApp({
   tsAccountType: Bun.env.TS_ACCOUNT_TYPE,
   tsEmailDomain: Bun.env.TS_EMAIL_DOMAIN,
   tsSecretKey: Bun.env.TS_SECRET_KEY,
+  tsAdminUser: Bun.env.TS_ADMIN_USER,
   tsUserGroups: Bun.env.TS_USER_GROUPS?.split(',').map((s) => s.trim()).filter(Boolean),
   allowedOrigins: Bun.env.ALLOWED_ORIGINS?.split(',').map((s) => s.trim()).filter(Boolean),
 });
