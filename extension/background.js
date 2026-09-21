@@ -9,6 +9,7 @@ const GET_LIVEBOARD = 'spotter:get-liveboard';
 const EMBED_TOKEN = 'spotter:embed-token';
 const CACHE_GET = 'spotter:cache-get';
 const CACHE_SET = 'spotter:cache-set';
+const DATASET_STREAM = 'spotter:dataset-stream';
 
 // Per-sheet resume cache (chrome.storage.local): lets a reload/reopen skip the
 // slow "pull rows -> load into ThoughtSpot" pipeline and open the worksheet we
@@ -85,6 +86,61 @@ async function createDataset(payload) {
     return { error: 'Worksheet build failed: ' + code };
   }
   return { dataset: body };
+}
+
+// Streaming variant of /dataset: POST ?stream=1 and forward each NDJSON line to
+// the content script over `port`. The final line is the {stage:'result',...}
+// body; we send {done:true} when the stream ends, {error} on any failure.
+async function streamDataset(payload, port) {
+  const safePost = (m) => { try { port.postMessage(m); } catch (e) { /* port closed */ } };
+  if (!config.backendUrl) { safePost({ error: 'No backend configured (see extension/src/config.js).' }); return; }
+  let res;
+  try {
+    res = await fetch(new URL('/dataset?stream=1', config.backendUrl), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/x-ndjson',
+        ...(devCredentials.backendApiKey ? { Authorization: 'Bearer ' + devCredentials.backendApiKey } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    safePost({ error: 'Could not reach the backend: ' + ((err && err.message) || String(err)) });
+    return;
+  }
+  if (!res.ok || !res.body) {
+    // A pre-stream failure (401/503/400) comes back as JSON, not a stream.
+    let body = null;
+    try { body = await res.json(); } catch { body = null; }
+    const detail = (body && (body.detail || body.error)) || ('HTTP ' + res.status);
+    safePost({ error: 'Worksheet build failed: ' + detail });
+    return;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  const flush = (line) => {
+    const s = line.trim();
+    if (!s) return;
+    try { safePost(JSON.parse(s)); } catch (e) { /* skip a malformed line */ }
+  };
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        flush(buf.slice(0, nl));
+        buf = buf.slice(nl + 1);
+      }
+    }
+    flush(buf);
+    safePost({ done: true });
+  } catch (err) {
+    safePost({ error: 'Stream read failed: ' + ((err && err.message) || String(err)) });
+  }
 }
 
 // Read-only: does the user / data model / worksheet already exist for this
@@ -225,4 +281,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   return false;
+});
+
+// Streaming needs more than one message back, which onMessage can't do, so the
+// content script opens a Port: it sends one { payload }, we stream events back.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== DATASET_STREAM) return;
+  port.onMessage.addListener(async (msg) => {
+    const payload = msg && msg.payload;
+    if (!payload) { try { port.postMessage({ error: 'no payload' }); } catch (e) {} return; }
+    try { await streamDataset(payload, port); } finally { try { port.disconnect(); } catch (e) {} }
+  });
 });
