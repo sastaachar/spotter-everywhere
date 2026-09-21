@@ -7,3 +7,15 @@ TS_TOKEN=
 # Optional: namespace provisioned usernames, and pick the account type.
 TS_USER_PREFIX=
 TS_ACCOUNT_TYPE=LOCAL_USER
+# Optional: domain for synthesized provisioned-user emails (cluster allowlist).
+TS_EMAIL_DOMAIN=thoughtspot.com
+# Trusted-auth secret key — enables /embed-token to JIT-provision the user AND
+# mint a login token AS them (embed runs as them, not the admin). Enable trusted
+# auth on the cluster (Develop → Security → Trusted authentication) to get this.
+TS_SECRET_KEY=
+# Groups the JIT-provisioned user joins — these carry the Spotter/search
+# privileges (create a group with the search/analysis + download privileges).
+# The worksheet is also shared with this group. Comma-separated names or GUIDs.
+TS_USER_GROUPS=
+# Origins allowed to call this backend cross-origin (the extension's Tableau host).
+ALLOWED_ORIGINS=

@@ -58,17 +58,29 @@ export interface SchemaAndErrors {
   errors?: unknown[];
 }
 
-/** Step 1: cache the CSV server-side; returns a cache token (plain text). */
+/** Step 1: cache the CSV server-side; returns a cache token (plain text).
+ *  Falcon clusters take no join_option; Embrace-mode clusters require it and
+ *  reject the upload with "join desired input is required" otherwise. Try the
+ *  Falcon path first, then retry with join_option=0 (JOIN_NOT_DESIRED = a new
+ *  standalone table, destination auto-deduced). */
 export async function cacheDataFile(env: TsEnv, csv: string, fileName: string): Promise<string> {
-  const fd = new FormData();
-  fd.append('content', new Blob([csv], { type: 'text/csv' }), fileName);
-  fd.append('name', fileName);
-  fd.append('separator', ',');
-  fd.append('hasheaderrow', 'true');
-  const res = await fetch(endpoint(env, '/cachedatafile'), { method: 'POST', headers: authHeaders(env), body: fd });
-  const text = (await res.text()).trim();
-  if (!res.ok) throw new Error(`cachedatafile -> HTTP ${res.status}: ${text.slice(0, 400)}`);
-  return text.replace(/^"|"$/g, ''); // returned as a bare/quoted GUID string
+  const attempt = async (joinOption?: number): Promise<{ ok: boolean; status: number; text: string }> => {
+    const fd = new FormData();
+    fd.append('content', new Blob([csv], { type: 'text/csv' }), fileName);
+    fd.append('name', fileName);
+    fd.append('separator', ',');
+    fd.append('hasheaderrow', 'true');
+    if (joinOption !== undefined) fd.append('join_option', String(joinOption));
+    const res = await fetch(endpoint(env, '/cachedatafile'), { method: 'POST', headers: authHeaders(env), body: fd });
+    return { ok: res.ok, status: res.status, text: (await res.text()).trim() };
+  };
+
+  let r = await attempt();
+  if (!r.ok && /join desired input is required/i.test(r.text)) {
+    r = await attempt(0);
+  }
+  if (!r.ok) throw new Error(`cachedatafile -> HTTP ${r.status}: ${r.text.slice(0, 400)}`);
+  return r.text.replace(/^"|"$/g, ''); // returned as a bare/quoted GUID string
 }
 
 /** Step 2: read back the auto-detected schema for the cached file. */
