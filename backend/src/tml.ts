@@ -116,7 +116,69 @@ export function generateLiveboardTml(name: string, worksheetName: string, column
     }
   }
 
-  const tiles = vizzes.map((_, i) => [`  - visualization_id: Viz_${i + 1}`, '    size: MEDIUM']).flat();
+  const tiles = vizzes.map((_, i) => [`    - visualization_id: Viz_${i + 1}`, '      size: MEDIUM']).flat();
+
+  return [
+    'liveboard:',
+    `  name: "${q(name)}"`,
+    '  visualizations:',
+    ...vizzes.flat(),
+    '  layout:',
+    '    tiles:',
+    ...tiles,
+    '',
+  ].join('\n');
+}
+
+/** One loaded source behind a liveboard tile: a worksheet plus its columns. */
+export interface LiveboardSource {
+  /** Title to show on the tile — the source visual's own name. */
+  title: string;
+  /** Worksheet the tile answers from. */
+  worksheetName: string;
+  columns: Column[];
+}
+
+/**
+ * Build a Liveboard TML spanning several worksheets — one tile per source, so a
+ * report's liveboard mirrors the report: each visual becomes a visualization
+ * answering from the worksheet loaded with that visual's own rows.
+ *
+ * A source with both a dimension and measures renders as a column chart, the
+ * way the visual it came from does; anything else falls back to a table. TML
+ * shape is version-sensitive — validate against the target cluster's
+ * tml/export.
+ */
+export function generateLiveboardOverSources(name: string, sources: LiveboardSource[]): string {
+  const vizzes: string[][] = [];
+
+  sources.forEach((source, index) => {
+    const id = `Viz_${index + 1}`;
+    const attrs = source.columns.filter((c) => c.type === 'ATTRIBUTE');
+    const measures = source.columns.filter((c) => c.type === 'MEASURE');
+    const dim = attrs[0];
+    // Keep a tile readable: one dimension and a few measures, not every column.
+    const charted = dim ? measures.slice(0, 3) : [];
+    const names = dim && charted.length
+      ? [dim.name, ...charted.map((m) => m.name)]
+      : source.columns.map((c) => c.name);
+
+    const block = [
+      `  - id: ${id}`,
+      '    answer:',
+      `      name: "${q(source.title)}"`,
+      '      tables:',
+      `      - name: "${q(source.worksheetName)}"`,
+      `      search_query: "${q(names.map((n) => `[${n}]`).join(' '))}"`,
+      '      answer_columns:',
+      ...names.map((n) => `      - name: "${q(n)}"`),
+    ];
+    if (dim && charted.length) block.push('      chart:', '        type: COLUMN');
+    else block.push('      display_mode: TABLE_MODE');
+    vizzes.push(block);
+  });
+
+  const tiles = vizzes.map((_, i) => [`    - visualization_id: Viz_${i + 1}`, '      size: MEDIUM']).flat();
 
   return [
     'liveboard:',

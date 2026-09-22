@@ -24,7 +24,12 @@ export function parseTmdlColumns(tmdl: string): Column[] {
     if (!m) continue;
     const kind = m[1];
     const name = (m[2] ?? m[3] ?? m[4] ?? '').trim();
-    if (!name || seen.has(name) || /^RowNumber/i.test(name)) continue;
+    // ThoughtSpot compares column names case-insensitively, and the slug ids
+    // collide too, so a model carrying both "State or Province" and
+    // "State Or Province" fails the whole import with "Multiple columns with
+    // the same name found". Keep the first spelling of each name.
+    const key = name.toLowerCase();
+    if (!name || seen.has(key) || /^RowNumber/i.test(name)) continue;
     if (!SAFE_NAME.test(name) || /\slabel$/i.test(name)) continue;
 
     let dt = '';
@@ -38,10 +43,17 @@ export function parseTmdlColumns(tmdl: string): Column[] {
     }
     if (isCalculated) continue; // calculated column — skip like Tableau calc fields
 
-    seen.add(name);
+    seen.add(key);
+    // ThoughtSpot rejects a MEASURE that is not numeric ("Incompatible column
+    // type MEASURE"), and a DAX measure can return text or a date — a slicer's
+    // alt-text measure, say. Type off the data, not off the declaration:
+    // measures with no declared dataType stay measures (Power BI measures are
+    // numeric unless they say otherwise) and get a numeric type to match.
     const numeric = NUMERIC.has(dt);
-    const type: Column['type'] = kind === 'measure' || numeric ? 'MEASURE' : 'ATTRIBUTE';
-    out.push({ id: slug(name, out.length), name, type, dataType: MAP[dt] ?? 'VARCHAR' });
+    const measure = numeric || (kind === 'measure' && !dt);
+    const type: Column['type'] = measure ? 'MEASURE' : 'ATTRIBUTE';
+    const dataType: Column['dataType'] = measure ? (MAP[dt] ?? 'DOUBLE') : (MAP[dt] ?? 'VARCHAR');
+    out.push({ id: slug(name, out.length), name, type, dataType });
   }
   return out;
 }
