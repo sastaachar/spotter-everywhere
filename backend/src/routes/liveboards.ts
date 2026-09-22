@@ -307,7 +307,18 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
         stage(`load-data[${i + 1}]`, 'ok', `${ds.title}: ${ds.rows.length} rows`);
         loaded.push({ title: ds.title, worksheetId: ws.worksheetId });
         // Type off the loaded rows so a tile charts what is actually numeric.
-        const numeric = ds.columns.map((_, ci) => ds.rows.some((r) => typeof r[ci] === 'number'));
+        // Power BI hands some measures over as numeric strings, so testing
+        // typeof alone left a KPI's only measure looking like an attribute and
+        // the tile fell back to a table. Require every non-empty value to parse,
+        // so a column of mixed text is not mistaken for a measure.
+        const isNumeric = (v: unknown): boolean =>
+          typeof v === 'number' ? Number.isFinite(v)
+            : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v));
+        const filled = (ci: number) => ds.rows.filter((r) => r[ci] !== null && r[ci] !== undefined && r[ci] !== '');
+        const numeric = ds.columns.map((_, ci) => {
+          const values = filled(ci);
+          return values.length > 0 && values.every((r) => isNumeric(r[ci]));
+        });
         sources.push({
           title: ds.title,
           visualType: ds.visualType,
