@@ -40,12 +40,15 @@ export function generateTml(name: string, columns: Column[]): GeneratedTml {
     '',
   ].join('\n');
 
-  // Worksheet columns reference the table column by NAME (<Table>::<Column
-  // Name>), not by db_column_name — using the db name fails validation with
-  // "columns use invalid table columns".
+  // A worksheet column references a TABLE PATH alias (<ALIAS>::<Column Name>),
+  // never the table name — that is what a real tml/export emits, and without
+  // the table_paths block every column fails with "Model/Worksheet columns use
+  // invalid table columns". Same shape as generateWorksheetOnTable below.
+  const alias = `${tableName.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'T'}_1`;
+
   const wsCols = columns.map((c) => [
     `    - name: "${q(c.name)}"`,
-    `      column_id: "${q(tableName)}::${q(c.name)}"`,
+    `      column_id: "${q(alias)}::${q(c.name)}"`,
     '      properties:',
     `        column_type: ${c.type}`,
   ].join('\n')).join('\n');
@@ -55,6 +58,11 @@ export function generateTml(name: string, columns: Column[]): GeneratedTml {
     `  name: "${q(name)}"`,
     '  tables:',
     `    - name: "${q(tableName)}"`,
+    '  table_paths:',
+    `    - id: "${q(alias)}"`,
+    `      table: "${q(tableName)}"`,
+    '      join_path:',
+    '      - {}',
     '  worksheet_columns:',
     wsCols,
     '',
