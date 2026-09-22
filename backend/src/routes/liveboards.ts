@@ -338,6 +338,7 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
           title: ds.title,
           visualType: ds.visualType,
           roles: ds.roles,
+          rowCount: ds.rows.length,
           worksheetName: ws.worksheetName,
           columns: ds.columns.map((col, ci) => ({
             id: `col_${ci}`,

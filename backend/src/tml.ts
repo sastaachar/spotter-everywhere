@@ -144,6 +144,8 @@ export interface LiveboardSource {
    *  visuals that share one type but draw differently — a scatter with a Size
    *  role is a bubble chart. */
   roles?: string[];
+  /** Rows behind the tile, so a long category list can be laid out sideways. */
+  rowCount?: number;
 }
 
 /**
@@ -205,19 +207,58 @@ const GEO_CHARTS = new Set(['GEO_AREA', 'GEO_BUBBLE']);
 /** Wide categories read better lying down than squeezed onto an x-axis. */
 const WIDE_CATEGORY_COUNT = 15;
 
-function chartTypeFor(source: LiveboardSource, dims: Column[], measures: Column[]): string {
-  if (!measures.length) return 'TABLE';
-  if (!dims.length) return 'KPI';
+/** The chart the source visual was drawn as, before the data is considered. */
+function mappedChart(source: LiveboardSource): string | undefined {
   const mapped = source.visualType ? CHART_BY_VISUAL[source.visualType] : undefined;
   // A Power BI scatter with a Size role is drawn as a bubble chart; the
   // visualType is `scatterChart` either way, so only the roles tell them apart.
   if (mapped === 'SCATTER' && (source.roles || []).includes('Size')) return 'BUBBLE';
+  return mapped;
+}
+
+/** Charts that plot values against a category, so they are useless without one. */
+const CATEGORY_CHARTS = new Set([
+  'COLUMN', 'BAR', 'STACKED_COLUMN', 'STACKED_BAR', 'LINE', 'AREA', 'STACKED_AREA',
+  'PIE', 'FUNNEL', 'TREEMAP', 'WATERFALL', 'HEATMAP', 'SANKEY', 'PARETO',
+  'SPIDER_WEB', 'LINE_COLUMN', 'LINE_STACKED_COLUMN', 'PIVOT_TABLE',
+]);
+
+/**
+ * Columns as they should be charted. Types are inferred from the loaded values,
+ * and a period column is all digits — "YEAR MONTH" arrives as 202111, a date as
+ * an epoch — so it lands as a measure and the visual loses its axis: a line
+ * chart of revenue over time came out as a lone KPI. The source visual knows
+ * better. When it is one that plots against a category, its first column is that
+ * category whatever the values happen to look like.
+ */
+function chartedColumns(source: LiveboardSource, chart: string | undefined): Column[] {
+  if (!chart || !CATEGORY_CHARTS.has(chart)) return source.columns;
+  if (source.columns.some((c) => c.type === 'ATTRIBUTE')) return source.columns;
+  if (source.columns.length < 2) return source.columns;
+  return source.columns.map((c, i) => (i === 0 ? { ...c, type: 'ATTRIBUTE' as const } : c));
+}
+
+function chartTypeFor(source: LiveboardSource, dims: Column[], measures: Column[]): string {
+  const mapped = mappedChart(source);
+  if (!measures.length) return 'TABLE';
   // A card keeps its single number. Power BI gives those visuals a placeholder
   // dimension ("Blank") that is not a real breakdown, so trusting the shape here
-  // would draw one lonely bar against a {Null} axis.
+  // would draw one lonely bar against a {Null} axis. A grid is the exception: a
+  // table of all-numeric columns has no dimension either, and it is still a
+  // table, not a single number.
+  if (!dims.length) return mapped === 'TABLE' || mapped === 'PIVOT_TABLE' ? mapped : 'KPI';
   if (mapped) return mapped;
-  // Unknown visual type: pick on shape.
-  return dims.length > 1 ? 'TABLE' : 'COLUMN';
+
+  // No mapping — a custom or third-party visual. Choose the chart that carries
+  // this shape of data best rather than defaulting everything to a column.
+  // A date axis is a trend, so it draws as a line.
+  if (dims.length === 1 && dims[0]!.dataType === 'DATE') return 'LINE';
+  // More than one breakdown is what a pivot exists for; a flat table buries it.
+  if (dims.length > 1) return 'PIVOT_TABLE';
+  // Long category lists need their labels lying down — squeezed onto an x-axis
+  // they overlap into noise.
+  if (source.rowCount && source.rowCount > WIDE_CATEGORY_COUNT) return 'BAR';
+  return 'COLUMN';
 }
 
 /**
@@ -236,16 +277,17 @@ export function generateLiveboardOverSources(name: string, sources: LiveboardSou
   const sizes: { width: number; height: number }[] = [];
 
   sources.forEach((source, index) => {
-    const dims = source.columns.filter((c) => c.type === 'ATTRIBUTE');
-    const measures = source.columns.filter((c) => c.type === 'MEASURE');
-    let chart = chartTypeFor(source, dims, measures);
+    const columns = chartedColumns(source, mappedChart(source));
+    const dims = columns.filter((c) => c.type === 'ATTRIBUTE');
+    const measures = columns.filter((c) => c.type === 'MEASURE');
+    let chart = chartTypeFor({ ...source, columns }, dims, measures);
 
     // Keep a tile readable: one dimension and a few measures, not every column.
     // A pivot is the exception — its whole point is nesting several dimensions.
     const axisDims = PIVOT_CHARTS.has(chart) ? dims.slice(0, 3) : dims.slice(0, 1);
     const charted = measures.slice(0, 3);
     const names = chart === 'TABLE'
-      ? source.columns.map((c) => c.name)
+      ? columns.map((c) => c.name)
       : chart === 'KPI'
         ? charted.map((m) => m.name)
         : [...axisDims.map((d) => d.name), ...charted.map((m) => m.name)];
