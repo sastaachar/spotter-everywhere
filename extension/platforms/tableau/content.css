@@ -372,3 +372,63 @@
   line-height: 1.4;
   max-width: 460px;
 }
+
+/* The wait, as a card centred in the panel. It is the first thing a user sees
+   after pressing Liveboard, so it carries the product's own mark, a bar that
+   keeps moving, and a line per step — not a bare list in the top corner. */
+.ts-spotter-inpage-progress {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  min-height: 0;
+}
+.ts-spotter-inpage-progress:empty { display: none; }
+.ts-spotter-progress-card {
+  width: 340px;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 22px 24px 20px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.08);
+}
+.ts-spotter-progress-head { display: flex; align-items: center; gap: 12px; }
+.ts-spotter-progress-mark {
+  flex: 0 0 34px; width: 34px; height: 34px; border-radius: 9px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--ts-panel-accent, #f2c811);
+}
+.ts-spotter-progress-mark svg { width: 17px; height: 17px; fill: #1a1a1a; }
+.ts-spotter-progress-titles { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ts-spotter-progress-titles strong {
+  font-size: 15px; font-weight: 650; letter-spacing: -0.01em;
+  color: var(--ts-panel-text, #252423);
+}
+.ts-spotter-progress-sub { font-size: 11px; color: var(--ts-panel-muted, #605e5c); }
+
+.ts-spotter-progress-track {
+  height: 4px; margin: 16px 0 18px; border-radius: 2px; overflow: hidden;
+  background: rgba(0, 0, 0, 0.07);
+}
+.ts-spotter-progress-track span {
+  display: block; width: 0; height: 100%; border-radius: 2px;
+  background: var(--ts-panel-accent, #f2c811);
+  transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Inside the card the steps are a quiet list; the card supplies the framing. */
+.ts-spotter-steps-panel { width: 100%; gap: 11px; }
+.ts-spotter-steps-panel .ts-spotter-step { font-size: 13px; }
+.ts-spotter-steps-panel .ts-spotter-step-icon { flex: 0 0 16px; width: 16px; height: 16px; }
+.ts-spotter-steps-panel .ts-spotter-step[data-state="active"] .ts-spotter-step-icon {
+  border-color: var(--ts-panel-accent, #f2c811);
+  border-top-color: transparent;
+}
+.ts-spotter-steps-panel .ts-spotter-step-detail {
+  flex: 0 0 auto; margin-left: auto; padding-left: 8px;
+  font-size: 11px; color: var(--ts-panel-muted, #605e5c);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%;
+}

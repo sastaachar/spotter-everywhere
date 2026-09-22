@@ -43,14 +43,43 @@ function requestEmbedToken(context) {
 }
 
 /** Progress checklist, same shape the platform content scripts use. */
+const SPARK_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true">'
+  + '<path d="M8 1l1.6 4.4L14 7l-4.4 1.6L8 13l-1.6-4.4L2 7l4.4-1.6z"/>'
+  + '<path d="M13 11l.7 1.8L15.5 13.5l-1.8.7L13 16l-.7-1.8-1.8-.7 1.8-.7z"/></svg>';
+
+/**
+ * The wait, as a card in the middle of the panel rather than a list clinging to
+ * its top-left corner. A bar carries overall progress, each step says what is
+ * happening, and the step's own detail ("3 of 8 loaded") sits beside it, so a
+ * build that takes a minute looks deliberate instead of stalled.
+ */
 function buildChecklist(container, title, defs) {
   container.textContent = '';
+  const card = document.createElement('div');
+  card.className = 'ts-spotter-progress-card';
+
+  const head = document.createElement('div');
+  head.className = 'ts-spotter-progress-head';
+  const mark = document.createElement('span');
+  mark.className = 'ts-spotter-progress-mark';
+  mark.innerHTML = SPARK_SVG;
+  const heading = document.createElement('div');
+  heading.className = 'ts-spotter-progress-titles';
+  const strong = document.createElement('strong');
+  strong.textContent = title;
+  const sub = document.createElement('span');
+  sub.className = 'ts-spotter-progress-sub';
+  sub.textContent = 'Powered by ThoughtSpot';
+  heading.append(strong, sub);
+  head.append(mark, heading);
+
+  const track = document.createElement('div');
+  track.className = 'ts-spotter-progress-track';
+  const fill = document.createElement('span');
+  track.appendChild(fill);
+
   const wrap = document.createElement('div');
   wrap.className = 'ts-spotter-steps ts-spotter-steps-panel';
-  const heading = document.createElement('div');
-  heading.className = 'ts-spotter-steps-title';
-  heading.textContent = title;
-  wrap.appendChild(heading);
   const rows = {};
   defs.forEach((step) => {
     const row = document.createElement('div');
@@ -61,20 +90,34 @@ function buildChecklist(container, title, defs) {
     const label = document.createElement('span');
     label.className = 'ts-spotter-step-label';
     label.textContent = step.label;
-    row.append(icon, label);
+    const detail = document.createElement('span');
+    detail.className = 'ts-spotter-step-detail';
+    row.append(icon, label, detail);
     wrap.appendChild(row);
     rows[step.key] = row;
   });
-  container.appendChild(wrap);
-  return (key, state) => {
+
+  card.append(head, track, wrap);
+  container.appendChild(card);
+
+  const order = defs.map((d) => d.key);
+  return (key, state, detail) => {
     // Finishing a step implies the ones before it finished too.
-    const order = defs.map((d) => d.key);
     const at = order.indexOf(key);
     order.forEach((k, i) => {
       if (i < at) rows[k].dataset.state = 'done';
     });
-    if (rows[key]) rows[key].dataset.state = state;
+    const row = rows[key];
+    if (row) {
+      row.dataset.state = state;
+      row.querySelector('.ts-spotter-step-detail').textContent = detail || '';
+    }
     if (state === 'active' && at + 1 < order.length) rows[order[at + 1]].dataset.state = 'pending';
+    // The bar counts finished steps, and gives the running one half credit so it
+    // still moves while a long step is in flight.
+    const done = order.filter((k) => rows[k].dataset.state === 'done').length;
+    const running = state === 'active' ? 0.5 : 0;
+    fill.style.width = Math.round(((done + running) / order.length) * 100) + '%';
   };
 }
 

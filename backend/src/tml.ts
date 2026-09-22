@@ -422,7 +422,12 @@ export function generateLiveboardOverSources(name: string, sources: LiveboardSou
   // a single KPI number occupy as much room as a chart, so each tile takes the
   // footprint its content needs and rows are packed left to right.
   const GRID_COLUMNS = 12;
+  /** Single-number cards lead, as they do on the report they came from. */
+  const headline = (i: number) => sizes[i]!.width <= 3 && sizes[i]!.height <= 2;
   const packed = (members: number[], indent: string): string[] => {
+    // Cards first, so they form a band across the top instead of being dealt
+    // between the charts and leaving a ragged hole in every row.
+    members = [...members].sort((a, b) => Number(headline(b)) - Number(headline(a)));
     const tiles: string[] = [];
     let cursorX = 0;
     let rowY = 0;

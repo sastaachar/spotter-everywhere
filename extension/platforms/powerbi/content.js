@@ -442,11 +442,15 @@
     if (!onCanvas) return;
     const w = btn.offsetWidth || 52;
     const h = btn.offsetHeight || 16;
-    // Inset from the title's edges. Flush against them the button sat on the
-    // visual's own border and looked like it was falling out of the tile.
-    const EDGE = 6;
-    btn.style.left = Math.round(r.right - w - EDGE - frame.left) + 'px';
-    btn.style.top = Math.round(r.top + (r.height - h) / 2 + 3 - frame.top) + 'px';
+    // Keep the button inside the visual, not on its edge. A title band often
+    // starts flush with the tile's own border, so centring in it puts the button
+    // half on the border; measure against the visual and inset from that.
+    const EDGE = 8;
+    const box = screenRect(titleEl.closest(VISUAL_CONTAINER_SELECTOR)) || r;
+    const right = Math.min(r.right, box.x + box.w);
+    const top = Math.max(r.top + (r.height - h) / 2, box.y + EDGE);
+    btn.style.left = Math.round(right - w - EDGE - frame.left) + 'px';
+    btn.style.top = Math.round(top - frame.top) + 'px';
   }
 
   function sync() {
@@ -727,11 +731,7 @@
     'actionButton', 'basicShape', 'shape', 'image', 'slicer', 'advancedSlicerVisual',
   ]);
 
-  // Visuals that are one number. A liveboard of headline figures repeats what
-  // the report already says and plots nothing, so these are left out: only what
-  // is worth drawing gets drawn. It also saves a worksheet per card, which is
-  // most of the wait on a page built largely of them.
-  const SINGLE_VALUE_VISUALS = new Set(['card', 'kpi', 'multiRowCard', 'gauge']);
+
 
   // A note tile is a paragraph, not a caption. Below this a text box is a
   // heading ("REGIONAL SALES"), a control's label ("WHAT IF the forecast was
@@ -741,18 +741,28 @@
   const TEXT_TILE_MIN_CHARS = 120;
 
   /**
-   * Whether a result is built on Power BI's "Blank" placeholder.
+   * Power BI's "Blank" placeholder, taken off a result.
    *
-   * Power BI names a placeholder field `<table>.Blank` — the stand-in a what-if
-   * parameter's readout is bound to, and what it gives a visual that has no real
-   * breakdown. It can land on either side: as the category, or inside the
-   * measure as `Sum(Forecast Adjustment.Blank)`. Either way there is no report
-   * data behind it, so it is not something to draw.
+   * Power BI names a placeholder field `<table>.Blank`, and it turns up two ways
+   * that have to be told apart. As a category it means "this visual has no
+   * breakdown" — every card carries one, holding nothing but nulls — so the
+   * column goes and the visual stays, becoming the single figure it always was.
+   * Aggregated into a measure, as `Sum(Forecast Adjustment.Blank)`, it is a
+   * what-if parameter's own readout, with no report data behind it at all, and
+   * the visual goes with it.
+   *
+   * Returns the result without its placeholder columns, or null to drop it.
    */
-  function isPlaceholderResult(columns, rows) {
-    if (columns.some((c) => /\.Blank\b/i.test(c.name || ''))) return true;
-    // Or the category column exists but holds nothing in any row.
-    return rows.every((row) => row[0] === null || row[0] === undefined || row[0] === '');
+  function stripPlaceholders(columns, rows) {
+    const isBlank = (name) => /\.Blank\b/i.test(name || '');
+    if (columns.some((c) => isBlank(c.name) && c.name.includes('('))) return null;
+    const empty = (v) => v === null || v === undefined || v === '';
+    const keep = columns.map((c, i) => !(isBlank(c.name) && rows.every((row) => empty(row[i]))));
+    if (!keep.some(Boolean)) return null;
+    return {
+      columns: columns.filter((_, i) => keep[i]),
+      rows: rows.map((row) => row.filter((_, i) => keep[i])),
+    };
   }
 
   /** Visual types that are a grid of rows rather than a drawn chart. */
@@ -816,7 +826,6 @@
       page.visuals.forEach((v) => {
         if (!v.visualId || seen.has(v.visualId)) return;
         if (CHROME_VISUALS.has(v.visualType)) return;
-        if (SINGLE_VALUE_VISUALS.has(v.visualType)) return;
         seen.add(v.visualId);
         // A visual that is on screen shows its own text — which is the only way
         // to read a narrative, whose words are generated rather than authored.
@@ -876,14 +885,13 @@
         if (!asNote()) skipped.push(label);
         continue;
       }
-      // One row is a single data point whatever visual drew it — nothing to plot.
-      if (rows.length < 2) { skipped.push(label); continue; }
-      // A visual bound to Power BI's "Blank" placeholder has no report data
-      // behind it — see isPlaceholderResult.
-      if (isPlaceholderResult(result.columns, rows)) { skipped.push(label); continue; }
+      // A card carries a placeholder category and a what-if readout is nothing
+      // but a placeholder — see stripPlaceholders.
+      const clean = stripPlaceholders(result.columns, rows);
+      if (!clean) { skipped.push(label); continue; }
       datasets.push({
         page: v.page,
-        title: distinct(v.title || nameFromColumns(result.columns, v.visualType, label)),
+        title: distinct(v.title || nameFromColumns(clean.columns, v.visualType, label)),
         // Lets the liveboard draw each tile the way the source visual is drawn.
         visualType: v.visualType || undefined,
         // Visuals that share a type can still draw differently — a scatter with
@@ -891,8 +899,8 @@
         roles: v.roles || undefined,
         // Power BI's format string travels with the column so the tile shows
         // dollars as dollars and a ratio as a percentage, not a bare number.
-        columns: result.columns.map((c) => ({ name: c.name, format: c.format || undefined })),
-        rows: rows.map((row) => row.map(loadableValue)),
+        columns: clean.columns.map((c) => ({ name: c.name, format: c.format || undefined })),
+        rows: clean.rows.map((row) => row.map(loadableValue)),
       });
     }
     if (!datasets.length) throw new Error('nothing on this page returned any data');
