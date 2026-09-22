@@ -22,6 +22,8 @@
   const MAX_LOAD_ROWS = 20000;
   const CREATE_SESSION = 'spotter:create-session';
   const CREATE_DATASET = 'spotter:create-dataset';
+  const CREATE_LIVEBOARD = 'spotter:create-liveboard';
+  const GET_LIVEBOARD = 'spotter:get-liveboard';
   const PLATFORM = 'powerbi';
   const FRAME_CLASS = 'ts-spotter-frame';
   const CANVAS_SELECTOR = '.displayAreaContainer, .displayArea';
@@ -56,6 +58,19 @@
     }
   });
 
+  function requestModel() {
+    const requestId = 'pbi-model-' + (requestSeq += 1);
+    return new Promise((resolve, reject) => {
+      pending.set(requestId, { resolve, reject });
+      window.postMessage({ type: REQUEST_EVENT, requestId, kind: 'tmdl' }, location.origin);
+      setTimeout(() => {
+        if (!pending.has(requestId)) return;
+        pending.delete(requestId);
+        reject(new Error('timed out exporting the Power BI model'));
+      }, 120000);
+    });
+  }
+
   function requestData(visualId, kind, maxRows) {
     const requestId = 'pbi-' + (requestSeq += 1);
     return new Promise((resolve, reject) => {
@@ -68,6 +83,15 @@
         reject(new Error('timed out waiting for the report backend'));
       }, 30000);
     });
+  }
+
+  // Embedded reports title the document "Microsoft Power BI" rather than the
+  // report, which would name every worksheet after the product.
+  const GENERIC_TITLE = /^(microsoft\s+)?power\s*bi$/i;
+  function reportTitleFromDocument() {
+    const title = document.title.replace(/\s*[-|]\s*Power BI.*$/i, '').trim();
+    if (!title || GENERIC_TITLE.test(title)) return null;
+    return title;
   }
 
   function domRect(titleEl) {
@@ -146,7 +170,7 @@
       workspace: pathMatch[1] ? decodeURIComponent(pathMatch[1]) : null,
       reportId: pathMatch[2] || null,
       pageName: pathMatch[3] ? decodeURIComponent(pathMatch[3]) : null,
-      reportTitle: document.title.replace(/\s*[-|]\s*Power BI.*$/i, '').trim() || null,
+      reportTitle: reportTitleFromDocument(),
       visualTitle,
       // From the report layout when available: the DOM exposes no visual guid.
       visualId: layout ? layout.visualId : null,
@@ -331,6 +355,7 @@
       buildRows(context),
       body,
       worksheetBuilderSection(context, () => lastResult),
+      liveboardSection(context),
       buildSendButton(context, () => lastResult)
     );
     if (context.visualId) loadData(body, context.visualId, (r) => { lastResult = r; });
@@ -437,6 +462,89 @@
     return value;
   }
 
+  // The embed authenticates as this user and /dataset shares the worksheet with
+  // it, so both sides must derive it identically — an embedded report has no
+  // workspace in its URL, and two different fallbacks meant the worksheet was
+  // shared with one identity and read by another.
+  function datasetUserId(context) {
+    return context.workspace || 'powerbi_user';
+  }
+
+  function ask(type, payload) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ type, payload }, (res) => {
+        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+        if (!res) return reject(new Error('No response from the extension worker.'));
+        if (res.error) return reject(new Error(res.error));
+        resolve(res);
+      });
+    });
+  }
+
+  // A liveboard covers the whole report, so it is keyed on the report id and
+  // built from the semantic model (TMDL) rather than one visual's rows.
+  /** Every visual on the current page, with the rows it is actually showing. */
+  async function reportDatasets(note) {
+    const seen = new Set();
+    const visuals = [];
+    findTitleTargets(document).forEach((titleEl) => {
+      const title = titleOf(titleEl);
+      const ctx = vizContext(titleEl, title);
+      if (!ctx.visualId || seen.has(ctx.visualId)) return;
+      seen.add(ctx.visualId);
+      visuals.push({ visualId: ctx.visualId, title: title || ctx.visualId });
+    });
+    if (!visuals.length) throw new Error('no visuals with an id on this page');
+
+    const datasets = [];
+    for (let i = 0; i < visuals.length; i += 1) {
+      const v = visuals[i];
+      note('Reading ' + (i + 1) + ' of ' + visuals.length + ': ' + v.title + '\u2026');
+      let result;
+      try {
+        result = await requestData(v.visualId, 'summary', MAX_LOAD_ROWS);
+      } catch (err) {
+        // One unreadable visual should not cost the whole liveboard.
+        console.warn('[Power BI Spotter] skipping "' + v.title + '":', err.message);
+        continue;
+      }
+      const rows = result.rawRows || result.rows || [];
+      if (!result.columns || !result.columns.length || !rows.length) continue;
+      datasets.push({
+        title: v.title,
+        columns: result.columns.map((c) => ({ name: c.name })),
+        rows: rows.map((row) => row.map(loadableValue)),
+      });
+    }
+    if (!datasets.length) throw new Error('none of the visuals on this page returned rows');
+    return datasets;
+  }
+
+  async function buildLiveboard(context, note) {
+    const guid = context.reportId;
+    if (!guid) throw new Error('no report id for this view');
+
+    note('Checking for an existing liveboard\u2026');
+    const found = await ask(GET_LIVEBOARD, { platform: PLATFORM, guid });
+    if (found.body && found.body.exists && found.body.liveboardId) return found.body.liveboardId;
+
+    // The liveboard mirrors the report, so it is built from every visual's real
+    // rows — one tile per visual. The semantic model alone would describe the
+    // columns but carry no data, and every tile would read "No data found".
+    const datasets = await reportDatasets(note);
+
+    note('Building the liveboard from ' + datasets.length + ' visuals\u2026');
+    const built = await ask(CREATE_LIVEBOARD, {
+      platform: PLATFORM, guid, name: context.reportTitle || undefined, datasets,
+    });
+    const body = built.body || {};
+    if (!body.liveboardId) {
+      const failed = (body.stages || []).find((st) => st.status === 'failed');
+      throw new Error(failed ? failed.stage + ': ' + (failed.detail || 'failed') : 'no liveboard id returned');
+    }
+    return body.liveboardId;
+  }
+
   function createDataset(context, result) {
     // Through the service worker so extension/src/config.js stays the only
     // place the backend URL and key are configured.
@@ -444,7 +552,7 @@
       chrome.runtime.sendMessage({
         type: CREATE_DATASET,
         payload: {
-          userid: context.workspace || 'user',
+          userid: datasetUserId(context),
           platform: PLATFORM,
           name: [context.reportTitle, context.visualTitle].filter(Boolean).join(' - ') || 'Power BI visual',
           data: {
@@ -461,6 +569,33 @@
         resolve(res.dataset);
       });
     });
+  }
+
+  // A liveboard spans the whole report, so it does not depend on the visual's
+  // rows — it is built from the report's semantic model.
+  function liveboardSection(context) {
+    const wrap = document.createElement('div');
+    wrap.className = 'ts-spotter-actions';
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'ts-spotter-more';
+    go.textContent = 'Create Liveboard';
+    const note = document.createElement('span');
+    note.className = 'ts-spotter-note';
+    const say = (text) => { note.textContent = text; };
+    go.addEventListener('click', async () => {
+      go.disabled = true;
+      try {
+        const liveboardId = await buildLiveboard(context, say);
+        say('Liveboard ready');
+        openSpotter({ ...context, liveboardId });
+      } catch (err) {
+        say(err.message);
+        go.disabled = false;
+      }
+    });
+    wrap.append(go, note);
+    return wrap;
   }
 
   function worksheetBuilderSection(context, getResult) {
@@ -569,7 +704,7 @@
       panel.open({ ...context, platform: PLATFORM, ...extra }, FRAME_CLASS);
     };
 
-    const userid = context.workspace || 'powerbi_user';
+    const userid = datasetUserId(context);
     try {
       // Already built (details panel route) — just embed it.
       if (context.worksheetId) return openPanelFrame({ userid, workspace: userid });

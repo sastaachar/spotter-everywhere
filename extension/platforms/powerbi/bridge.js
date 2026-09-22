@@ -298,7 +298,69 @@
     };
   }
 
-  const HANDLERS = { summary };
+  // The semantic model behind this report, as TMDL — the text modeling language
+  // the backend parses into liveboard columns. Fabric's getDefinition is a
+  // long-running operation: 202 plus a Location to poll.
+  const FABRIC = 'https://api.fabric.microsoft.com/v1';
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  async function resolveModelIds() {
+    const ex = await exploration();
+    const report = ex.report || {};
+    const datasetId = report.model && report.model.dbName;
+    if (!datasetId) throw new Error('could not find the semantic model for this report');
+    // An embedded report has no /groups/<id>/ in its URL, so fall back to the
+    // personal workspace the Fabric API reports.
+    let workspaceId = (location.pathname.match(/\/groups\/([^/]+)\//) || [])[1] || null;
+    if (!workspaceId || workspaceId === 'me') {
+      const res = await fetch(FABRIC + '/workspaces', { headers: auth() });
+      if (!res.ok) throw new Error('workspace lookup failed (' + res.status + ')');
+      const list = await res.json();
+      const personal = (list.value || []).find((w) => w.type === 'Personal');
+      workspaceId = personal ? personal.id : null;
+    }
+    if (!workspaceId) throw new Error('could not resolve the workspace for this report');
+    return { datasetId, workspaceId, reportName: report.displayName || null };
+  }
+
+  function auth() {
+    return { Authorization: 'Bearer ' + window.powerBIAccessToken };
+  }
+
+  async function tmdl() {
+    const ids = await resolveModelIds();
+    const url = `${FABRIC}/workspaces/${ids.workspaceId}/semanticModels/${ids.datasetId}/getDefinition?format=TMDL`;
+    let res = await fetch(url, { method: 'POST', headers: auth() });
+    let body;
+    if (res.status === 200) {
+      body = await res.json();
+    } else if (res.status === 202) {
+      const location = res.headers.get('Location');
+      if (!location) throw new Error('getDefinition accepted but returned no Location');
+      body = null;
+      for (let i = 0; i < 40 && !body; i += 1) {
+        await sleep(1500);
+        const poll = await fetch(location, { headers: auth() });
+        if (!poll.ok) continue;
+        const state = await poll.json();
+        if (state.status === 'Succeeded') body = await (await fetch(location + '/result', { headers: auth() })).json();
+        else if (state.status === 'Failed') throw new Error('getDefinition failed: ' + JSON.stringify(state).slice(0, 200));
+      }
+      if (!body) throw new Error('timed out waiting for the model definition');
+    } else {
+      throw new Error('getDefinition ' + res.status + ': ' + (await res.text()).slice(0, 200));
+    }
+
+    const parts = (body.definition && body.definition.parts) || [];
+    // Only the table definitions carry columns and measures.
+    const tables = parts.filter((p) => /\.tmdl$/i.test(p.path || '') && !/\/(model|database|expressions|relationships|cultures)\b/i.test(p.path));
+    const chosen = tables.length ? tables : parts.filter((p) => /\.tmdl$/i.test(p.path || ''));
+    if (!chosen.length) throw new Error('the model definition contained no TMDL parts');
+    const text = chosen.map((p) => decodeURIComponent(escape(atob(p.payload)))).join('\n\n');
+    return { model: text, parts: chosen.length, datasetId: ids.datasetId, workspaceId: ids.workspaceId, reportName: ids.reportName };
+  }
+
+  const HANDLERS = { summary, tmdl: () => tmdl() };
 
   window.addEventListener('message', (ev) => {
     if (ev.origin !== location.origin || !ev.data || ev.data.type !== REQUEST) return;
