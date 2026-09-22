@@ -5,7 +5,10 @@
   all: initial;
   position: fixed;
   right: 18px;
-  bottom: 18px;
+  /* Top-right, under the page's own header — content.js measures it. The
+     bottom-right corner belongs to the embedded report: Power BI docks its
+     Liveboard control there. */
+  top: 72px;
   z-index: 2147483646;
   display: inline-flex;
   align-items: center;
@@ -24,8 +27,7 @@
   white-space: nowrap;
 }
 /* `all: initial` plus an explicit display beats the browser's own
-   `[hidden] { display: none }`, so hiding the button had no effect at all —
-   it kept sitting on top of the report's controls with hidden="" set. */
+   `[hidden] { display: none }`, so `hidden` alone does nothing here. */
 .ts-embed-btn[hidden] { display: none !important; }
 .ts-embed-btn svg { width: 13px; height: 13px; fill: #f2c811; }
 .ts-embed-btn:hover { background: #f8f8f8; }

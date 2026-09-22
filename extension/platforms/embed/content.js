@@ -118,27 +118,52 @@
     const slot = document.querySelector('[data-spotter-embed-here]');
     const placeholder = slot ? slot.innerHTML : null;
 
-    // While a report is embedded this button steps aside. Power BI docks its own
-    // Liveboard control to the bottom-right of the frame, and a button fixed to
-    // the bottom-right of the page lands squarely on top of it — the report's
-    // own control was there all along, underneath this one. The panel's close
-    // control takes over until the report is gone.
+    const setLabel = (embedded) => {
+      label.textContent = embedded ? 'Remove report' : 'Embed with Spotter';
+      btn.title = embedded
+        ? 'Take the embedded report back out of this page'
+        : 'Embed this Power BI report, with Spotter and Liveboard on it';
+    };
+
     const removed = () => {
       if (slot && placeholder !== null) slot.innerHTML = placeholder;
-      btn.hidden = false;
+      setLabel(false);
     };
 
     btn.addEventListener('click', () => {
-      if (document.querySelector('.' + PANEL_CLASS)) return;
-      if (embed(report, removed)) btn.hidden = true;
+      const open = document.querySelector('.' + PANEL_CLASS);
+      if (open) { open.remove(); removed(); return; }
+      if (embed(report, removed)) setLabel(true);
       else console.error('[Spotter Embed] not a Power BI report URL:', report);
     });
     return btn;
   }
 
+  /**
+   * How far down the button sits.
+   *
+   * Top-right, under whatever the page keeps up there — its own navigation and
+   * account menu — so it covers neither. It cannot live at the bottom-right:
+   * Power BI docks its Liveboard control to that corner of the embedded frame,
+   * and with the frame filling the page the two land on the same pixels.
+   */
+  function topOffset() {
+    let bottom = 0;
+    document.querySelectorAll('header, [role="banner"]').forEach((el) => {
+      const r = el.getBoundingClientRect();
+      // Only a bar actually sitting at the top of the page counts.
+      if (r.height > 0 && r.top <= 8) bottom = Math.max(bottom, r.bottom);
+    });
+    return Math.round(bottom) + 12;
+  }
+
   const report = wantedReport();
   if (!report) return;
   if (document.querySelector('.' + BUTTON_CLASS)) return;
-  document.body.appendChild(build(report));
+  const button = build(report);
+  document.body.appendChild(button);
+  const place = () => { button.style.top = topOffset() + 'px'; };
+  place();
+  addEventListener('resize', place);
   console.log('[Spotter Embed] ready for', report);
 })();
