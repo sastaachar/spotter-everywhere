@@ -64,25 +64,20 @@
   }
 
   /**
-   * Read the report in a frame nobody sees, and come back with a liveboard id.
+   * Ask the report that is already on the page for its Liveboard.
    *
-   * The frame is off-screen rather than display:none — Power BI lays a report
-   * out only when it believes it is visible, and a report that never lays out
-   * never tells us what is on it.
+   * The data has to be read inside Power BI — it comes from Power BI's own
+   * query service, authenticated by the signed-in session, which exists only in
+   * a frame on app.powerbi.com. The report is already in such a frame, so it
+   * does the work and hands back a liveboard id.
    */
-  function harvest(report, onProgress) {
-    const src = embedUrl(report);
-    if (!src) return Promise.reject(new Error('That is not a Power BI report URL.'));
+  function harvest(frame, onProgress) {
     return new Promise((resolve, reject) => {
-      const frame = document.createElement('iframe');
-      frame.className = 'ts-embed-harvest';
-      frame.src = src;
       let settled = false;
       const finish = (fn, arg) => {
         if (settled) return;
         settled = true;
         removeEventListener('message', onMessage);
-        frame.remove();
         fn(arg);
       };
       function onMessage(ev) {
@@ -92,11 +87,8 @@
         finish(resolve, { liveboardId: ev.data.liveboardId, userid: ev.data.userid, pageTitle: ev.data.pageTitle });
       }
       addEventListener('message', onMessage);
-      frame.addEventListener('load', () => {
-        // The content script inside answers once its layout has arrived.
-        try { frame.contentWindow.postMessage({ type: BUILD_REQUEST }, '*'); } catch (e) { /* cross-origin is fine */ }
-      });
-      document.body.appendChild(frame);
+      try { frame.contentWindow.postMessage({ type: BUILD_REQUEST }, '*'); }
+      catch (e) { finish(reject, new Error('Could not reach the report frame.')); }
       setTimeout(() => finish(reject, new Error('Timed out reading the report.')), 15 * 60 * 1000);
     });
   }
@@ -178,12 +170,12 @@
     container.appendChild(box);
   }
 
-  function frame(host, subtitle) {
+  function frame(host, heading, subtitle) {
     const panel = document.createElement('section');
     panel.className = PANEL_CLASS;
     const head = document.createElement('header');
     const title = document.createElement('strong');
-    title.textContent = 'ThoughtSpot Liveboard';
+    title.textContent = heading;
     const note = document.createElement('span');
     note.textContent = subtitle;
     head.append(title, note);
@@ -195,30 +187,54 @@
     return { panel, head, body };
   }
 
-  async function run(report, host, button) {
-    const { head, body } = frame(host, 'The report, as ThoughtSpot renders it');
-    const step = progressCard(body, 'Building your Liveboard');
-    button.disabled = true;
+  /** The Power BI report itself, in the page — the "before". */
+  function showReport(report, host) {
+    const src = embedUrl(report);
+    if (!src) throw new Error('That is not a Power BI report URL.');
+    const { head, body } = frame(host, 'Power BI', 'The report as Power BI renders it');
+    head.dataset.tool = 'powerbi';
+    const iframe = document.createElement('iframe');
+    iframe.title = 'Embedded Power BI report';
+    iframe.src = src;
+    iframe.setAttribute('allowfullscreen', '');
+    iframe.referrerPolicy = 'no-referrer-when-downgrade';
+    body.appendChild(iframe);
+    return iframe;
+  }
+
+  /** The same report as a ThoughtSpot Liveboard — the "after". */
+  async function showLiveboard(reportFrame, host, onDone) {
+    const panel = host.querySelector('.' + PANEL_CLASS);
+    const head = panel.querySelector('header');
+    const body = panel.querySelector('.ts-embed-body');
+    // The report frame stays exactly where it is. Moving an iframe in the DOM
+    // reloads it, and the frame is the only thing that can read the report —
+    // re-parenting it restarted the content script and the build request went
+    // to a frame that no longer existed. So cover it instead of moving it.
+    const cover = document.createElement('div');
+    cover.className = 'ts-embed-cover';
+    body.appendChild(cover);
+    const step = progressCard(cover, 'Building your Liveboard');
     try {
       step('check', 'active');
-      const built = await harvest(report, (p) => {
-        // The Power BI side reports the same stages it shows in the report.
-        if (p.key === 'check') step('check', p.state, p.detail);
-        else if (p.key === 'read') step('read', p.state, p.detail);
-        else if (p.key === 'build') step('build', p.state, p.detail);
-      });
+      const built = await harvest(reportFrame, (p) => step(p.key, p.state, p.detail));
       step('build', 'done');
       step('open', 'active');
       if (!window.__spotterLiveboard) throw new Error('The Liveboard embed did not load — reload the page.');
+      // Only now is the report replaced: up to here it has been doing the work.
+      reportFrame.remove();
+      cover.remove();
       await window.__spotterLiveboard.mount(body, built.liveboardId, built.userid);
-      if (built.pageTitle) head.querySelector('span').textContent = built.pageTitle;
-      button.disabled = false;
-      return true;
+      head.dataset.tool = 'thoughtspot';
+      head.querySelector('strong').textContent = 'ThoughtSpot Liveboard';
+      head.querySelector('span').textContent = built.pageTitle
+        ? built.pageTitle + ' · the same report, in ThoughtSpot'
+        : 'The same report, in ThoughtSpot';
+      onDone(true);
     } catch (err) {
       console.error('[Spotter Embed]', err);
-      failure(body, err.message, () => run(report, host, button));
-      button.disabled = false;
-      return false;
+      failure(cover, err.message, () => { cover.remove(); onDone(false); });
+      onDone(false);
     }
   }
 
@@ -273,7 +289,6 @@
 
   let report = storedReport() || declared;
   const host = mountPoint();
-  const placeholder = host.innerHTML;
 
   const bar = document.createElement('div');
   bar.className = 'ts-embed-bar';
@@ -297,29 +312,48 @@
   const { box: settings, input } = settingsPanel(report, (value) => {
     report = value;
     storeReport(value);
-    label.textContent = 'Rebuild Liveboard';
-    run(report, host, button);
+    // A new report starts where every report starts: showing Power BI.
+    toPowerBi();
   });
 
-  let embedded = false;
-  button.addEventListener('click', () => {
-    if (embedded) {
-      host.innerHTML = placeholder;
-      embedded = false;
-      label.textContent = 'Embed with Spotter';
-      button.title = 'Build this report as a ThoughtSpot Liveboard and show it here';
-      return;
+  // Two views of the same report, and one button between them. The page opens
+  // on Power BI — what the customer has today — and the button replaces it with
+  // the ThoughtSpot Liveboard of that same report.
+  const POWERBI = 'Replace with ThoughtSpot';
+  const THOUGHTSPOT = 'Show the Power BI report';
+  let reportFrame = null;
+  let showing = 'none';
+
+  function toPowerBi() {
+    try {
+      reportFrame = showReport(report, host);
+      showing = 'powerbi';
+      label.textContent = POWERBI;
+      button.title = 'Build this report as a ThoughtSpot Liveboard and show that instead';
+      button.disabled = false;
+    } catch (err) {
+      failure(host, err.message, () => toPowerBi());
+      button.disabled = true;
     }
-    run(report, host, button).then((ok) => {
-      embedded = true;
-      label.textContent = ok ? 'Remove Liveboard' : 'Try again';
-      button.title = 'Take the Liveboard back out of this page';
+  }
+
+  function toThoughtSpot() {
+    if (!reportFrame) return;
+    button.disabled = true;
+    label.textContent = 'Building\u2026';
+    showing = 'thoughtspot';
+    showLiveboard(reportFrame, host, (ok) => {
+      reportFrame = null;
+      label.textContent = ok ? THOUGHTSPOT : 'Try again';
+      button.title = ok ? 'Go back to the Power BI report' : 'Build the Liveboard again';
+      button.disabled = false;
+      if (!ok) showing = 'powerbi';
     });
-  });
-  gear.addEventListener('click', () => {
-    settings.hidden = !settings.hidden;
-    input.value = report;
-    if (!settings.hidden) input.focus();
+  }
+
+  button.addEventListener('click', () => {
+    if (showing === 'powerbi') toThoughtSpot();
+    else toPowerBi();
   });
 
   bar.append(button, gear);
@@ -331,5 +365,6 @@
   };
   place();
   addEventListener('resize', place);
+  toPowerBi();
   console.log('[Spotter Embed] ready for', report);
 })();
