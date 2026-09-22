@@ -372,3 +372,28 @@
   line-height: 1.4;
   max-width: 460px;
 }
+
+/* Recreate button — small round ↻ pinned just left of the Liveboard button. */
+.ts-lb-recreate {
+  right: 116px;
+  padding: 4px 9px;
+  font-size: 15px;
+  line-height: 16px;
+}
+
+/* Retry button inside the modal body (shown only on failure). */
+.ts-spotter-retry-inline {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 14px;
+  padding: 8px 16px;
+  border: 1px solid #2770ef;
+  border-radius: 10px;
+  background: #2770ef;
+  color: #ffffff;
+  font: 600 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  cursor: pointer;
+}
+.ts-spotter-retry-inline:hover { background: #1b5fd0; border-color: #1b5fd0; }

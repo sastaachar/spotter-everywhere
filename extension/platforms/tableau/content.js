@@ -129,15 +129,25 @@
     btn.addEventListener('click', (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
-      const m = location.pathname.match(VIEW_PATH_PATTERN) || [];
-      openLiveboard({
-        site: m[1] || null,
-        workbook: m[2] || null,
-        dashboard: m[3] ? decodeURIComponent(m[3]) : null,
-        url: location.href,
-      });
+      openLiveboard(context());
     });
+    btn.addEventListener('mousedown', (ev) => ev.stopPropagation());
     document.body.appendChild(btn);
+
+    // Recreate: if you don't like the board, delete it and build a fresh one.
+    const recreate = document.createElement('button');
+    recreate.type = 'button';
+    recreate.className = LB_BUTTON_CLASS + ' ts-lb-recreate';
+    recreate.title = 'Delete this liveboard and build a fresh one';
+    recreate.setAttribute('aria-label', 'Recreate Liveboard');
+    recreate.innerHTML = '<span>↻</span>';
+    recreate.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      openLiveboard(context(), { rebuild: true });
+    });
+    recreate.addEventListener('mousedown', (ev) => ev.stopPropagation());
+    document.body.appendChild(recreate);
   }
 
   // Resolve the current view's workbook via the session (same-origin vizportal):
@@ -181,13 +191,13 @@
     });
   }
 
-  async function openLiveboard(context) {
+  async function openLiveboard(context, options = {}) {
     closePanel();
     const loading = el('aside', FRAME_CLASS + ' ts-spotter-loading');
     document.body.appendChild(loading);
     if (!extensionAlive()) { loading.textContent = RELOAD_MSG; return; }
-    const setStep = buildChecklist(loading, LIVEBOARD_STEP_DEFS, 'Building Liveboard');
-    const showRetry = decorateModal(loading, () => openLiveboard(context));
+    const setStep = buildChecklist(loading, LIVEBOARD_STEP_DEFS, options.rebuild ? 'Recreating Liveboard' : 'Building Liveboard');
+    const showRetry = decorateModal(loading, () => openLiveboard(context, options));
     const fail = (msg) => {
       const note = el('div', 'ts-spotter-steps-error', msg);
       loading.querySelector('.ts-spotter-steps')?.appendChild(note);
@@ -223,14 +233,14 @@
       // Build once: look it up by name first — no download, no build.
       const found = await workerCall(GET_LIVEBOARD, { platform: PLATFORM, name: lbName });
       if (found.error && !/reach the backend/i.test(found.error)) { setStep('check', 'error'); return fail(found.error); }
-      if (found.body && found.body.exists) {
+      if (!options.rebuild && found.body && found.body.exists) {
         setStep('check', 'done', 'already built');
         ['data', 'lookup', 'load-data', 'generate', 'import', 'share'].forEach((k) => setStep(k, 'skip', 'reused'));
         setStep('open', 'active');
         if (openPanel(found.body.liveboardId, lbName)) setStep('open', 'done');
         return;
       }
-      setStep('check', 'done', dashboard ? ('tab: ' + dashboard) : 'needs build');
+      setStep('check', 'done', options.rebuild ? 'recreating' : (dashboard ? ('tab: ' + dashboard) : 'needs build'));
 
       // Read the first worksheet's rows so the liveboard sits on real data.
       setStep('data', 'active');
@@ -248,7 +258,7 @@
       let fileBase64 = null;
       try { if (wb.downloadUrl) fileBase64 = await fetchWorkbookBase64(wb.downloadUrl); } catch (e) { /* tabs optional */ }
 
-      const payload = { platform: PLATFORM, name: lbName, guid, data: { columns, rows: data.rows }, fileBase64, filename: (wb.name || 'workbook') + '.twbx' };
+      const payload = { platform: PLATFORM, name: lbName, guid, rebuild: !!options.rebuild, data: { columns, rows: data.rows }, fileBase64, filename: (wb.name || 'workbook') + '.twbx' };
       let liveboardId;
       let gotEvent = false;
       try {
@@ -371,13 +381,16 @@
     close.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); closePanel(); });
     bar.appendChild(close);
     container.appendChild(bar);
+    // Retry lives inside the modal body (below the checklist), not in the corner
+    // bar — it only appears when a step fails.
     return function showRetry() {
-      if (bar.querySelector('.ts-spotter-modal-retry')) return;
-      const retry = el('button', 'ts-spotter-modal-btn ts-spotter-modal-retry', 'Retry');
+      if (container.querySelector('.ts-spotter-retry-inline')) return;
+      const retry = el('button', 'ts-spotter-retry-inline', 'Retry');
       retry.type = 'button';
       retry.title = 'Retry';
       retry.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); try { onRetry(); } catch (err) { console.error(err); } });
-      bar.insertBefore(retry, close);
+      const body = container.querySelector('.ts-spotter-steps') || container;
+      body.appendChild(retry);
     };
   }
 

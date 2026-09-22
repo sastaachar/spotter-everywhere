@@ -1,5 +1,5 @@
 import { generateTml, generateLiveboardTml, generateTabbedLiveboardTml } from './tml';
-import { importTml, findGuid, importErrors, findMetadataId, shareMetadata } from './thoughtspot';
+import { importTml, findGuid, importErrors, findMetadataId, shareMetadata, deleteMetadata } from './thoughtspot';
 import type { Column, WorkbookStructure } from './tableau';
 import type { TsAdminEnv, LoadedDataset } from './deps';
 
@@ -20,6 +20,8 @@ export interface LiveboardParams {
   rows: unknown[][] | null;
   /** Parsed workbook structure; when it has dashboards, the liveboard is tabbed. */
   structure: WorkbookStructure | null;
+  /** "Recreate": delete an existing board of this name and build a fresh one. */
+  rebuild?: boolean;
 }
 
 type LoadDatasetFn = (
@@ -129,7 +131,7 @@ async function runLiveboardBuild(
   hostBase: string,
   groups: string[],
   loadDataset: LoadDatasetFn,
-  { platform, name, columns, rows, structure }: LiveboardParams,
+  { platform, name, columns, rows, structure, rebuild }: LiveboardParams,
   emit: ProgressEmit,
 ): Promise<BuildResult> {
   const pinboardUrl = (id: string) => `${hostBase}/#/pinboard/${id}`;
@@ -150,12 +152,18 @@ async function runLiveboardBuild(
     await emit({ stage: 'lookup', status: 'error', detail });
     return { status: 502, body: { platform, name, reused: false, error: 'cluster_error', detail } };
   }
-  if (existing) {
+  if (existing && !rebuild) {
     await shareLiveboard(tsEnv, existing, groups);
     await emit({ stage: 'lookup', status: 'done', detail: 'reused existing', liveboardId: existing });
     return { status: 200, body: { platform, name, reused: true, liveboardId: existing, liveboardUrl: pinboardUrl(existing) } };
   }
-  await emit({ stage: 'lookup', status: 'done', detail: 'not found — building' });
+  if (existing && rebuild) {
+    // "Recreate": drop the old board so the fresh import doesn't make a duplicate.
+    try { await deleteMetadata(tsEnv, 'LIVEBOARD', [existing]); } catch (e) { console.error(`[create-liveboard] delete-before-rebuild failed:`, (e as Error).message); }
+    await emit({ stage: 'lookup', status: 'done', detail: 'deleted old — rebuilding' });
+  } else {
+    await emit({ stage: 'lookup', status: 'done', detail: 'not found — building' });
+  }
 
   // 2. load-data — load real rows into Falcon and wrap a worksheet, so the
   //    liveboard sits on populated data. Skipped when no rows were provided.
