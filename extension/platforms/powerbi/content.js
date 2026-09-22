@@ -765,6 +765,27 @@
     };
   }
 
+  /** Visual types that show one headline figure. */
+  const SINGLE_VALUE_VISUALS = new Set(['card', 'kpi', 'multiRowCard', 'gauge']);
+
+  /**
+   * A card's number, without the cents.
+   *
+   * Power BI's format string asks money for two decimals, but its card visual
+   * never shows them — it abbreviates to $11.43M — because display units are a
+   * separate setting we cannot read. Rendered in full, "US$27,812,381.00" is
+   * wider than a quarter-width tile and truncates mid-number. Cents on a figure
+   * that size say nothing, so they go.
+   *
+   * Only money loses them. A percentage's one decimal is the difference between
+   * 54.2% and 54%, and it costs no width worth having.
+   */
+  const MONEY = /[$£€¥₹₩₽₺]/;
+  function headlineFormat(format) {
+    if (!format || !MONEY.test(format)) return format;
+    return format.replace(/\.[0#]+/g, '');
+  }
+
   /** Visual types that are a grid of rows rather than a drawn chart. */
   const GRID_VISUALS = new Set(['tableEx', 'pivotTable', 'matrix']);
 
@@ -899,7 +920,10 @@
         roles: v.roles || undefined,
         // Power BI's format string travels with the column so the tile shows
         // dollars as dollars and a ratio as a percentage, not a bare number.
-        columns: clean.columns.map((c) => ({ name: c.name, format: c.format || undefined })),
+        columns: clean.columns.map((c) => ({
+          name: c.name,
+          format: (SINGLE_VALUE_VISUALS.has(v.visualType) ? headlineFormat(c.format) : c.format) || undefined,
+        })),
         rows: clean.rows.map((row) => row.map(loadableValue)),
       });
     }
