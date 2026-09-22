@@ -172,15 +172,28 @@ export async function uploadCsvDataset(
   // table, one id, and guarantees the rows are the ones just extracted.
   const existingId = await findMetadataId(env, tableName);
   if (existingId) {
-    const reloaded = (await loadData(env, existingId, cacheToken, true, true)) as SchemaAndErrors;
-    return {
-      cacheToken,
-      tableId: existingId,
-      tableName,
-      columns: reloaded?.schema?.columns ?? read.schema?.columns ?? [],
-      loaded: reloaded?.status ?? true,
-      errors: reloaded?.errors,
-    };
+    // loaddata writes into the existing schema, so it fails outright when the
+    // source's shape has changed (a visual gaining or losing a column). Drop
+    // the table and fall through to a fresh create rather than leaving the
+    // caller with yesterday's rows.
+    try {
+      const reloaded = (await loadData(env, existingId, cacheToken, true, true)) as SchemaAndErrors;
+      if (reloaded?.status !== false) {
+        return {
+          cacheToken,
+          tableId: existingId,
+          tableName,
+          columns: reloaded?.schema?.columns ?? read.schema?.columns ?? [],
+          loaded: true,
+          errors: reloaded?.errors,
+        };
+      }
+    } catch (e) {
+      console.warn(`[uploadCsvDataset] reload of "${tableName}" failed, recreating:`, (e as Error).message);
+    }
+    await deleteTable(env, existingId).catch((e: Error) => {
+      console.error(`[uploadCsvDataset] could not drop "${tableName}":`, e.message);
+    });
   }
 
   const created = await createTable(env, schema);
