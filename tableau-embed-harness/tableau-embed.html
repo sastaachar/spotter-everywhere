@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Customer Analysis · Insights Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script type="module" src="https://prod-in-a.online.tableau.com/javascripts/api/tableau.embedding.3.latest.min.js"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #F3F5F8;
+    --surface: #FFFFFF;
+    --surface-2: #F8FAFC;
+    --ink: #141B26;
+    --muted: #5A6675;
+    --faint: #8A95A3;
+    --brand: #0E2A47;
+    --brand-2: #163C63;
+    --brand-ink: #E8EEF5;
+    --brand-muted: #9DB0C6;
+    --accent: #0B5FCC;
+    --accent-soft: #E6F0FC;
+    --positive: #0F7B4F;
+    --positive-soft: #E3F3EB;
+    --negative: #B3261E;
+    --negative-soft: #FBE9E7;
+    --warn: #8A5A00;
+    --warn-soft: #FFF3D6;
+    --border: #DDE3EA;
+    --border-strong: #C5CED9;
+    --shadow: 0 1px 2px rgba(20,27,38,.06), 0 4px 16px rgba(20,27,38,.05);
+    --shimmer: rgba(255,255,255,.55);
+    --r: 4px;
+    --display: "Manrope", "Avenir Next", "Segoe UI", sans-serif;
+    --text: "IBM Plex Sans", -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #0E2A47; --surface: #133659; --surface-2: #17416A;
+      --ink: #E8EEF5; --muted: #A9BBD0; --faint: #7F96B0;
+      --brand: #081C33; --brand-2: #0E2A47; --brand-ink: #E8EEF5; --brand-muted: #9DB0C6;
+      --accent: #7FB4FF; --accent-soft: #1C4A7A;
+      --positive: #6ED3A0; --positive-soft: #124A3C;
+      --negative: #FF9A90; --negative-soft: #4A1F2A;
+      --warn: #F5CC70; --warn-soft: #4A3A14;
+      --border: #24507A; --border-strong: #2F6193;
+      --shadow: 0 1px 2px rgba(0,0,0,.25), 0 4px 16px rgba(0,0,0,.25); --shimmer: rgba(255,255,255,.08);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0E2A47; --surface: #133659; --surface-2: #17416A;
+      --ink: #E8EEF5; --muted: #A9BBD0; --faint: #7F96B0;
+      --brand: #081C33; --brand-2: #0E2A47; --brand-ink: #E8EEF5; --brand-muted: #9DB0C6;
+      --accent: #7FB4FF; --accent-soft: #1C4A7A;
+      --positive: #6ED3A0; --positive-soft: #124A3C;
+      --negative: #FF9A90; --negative-soft: #4A1F2A;
+      --warn: #F5CC70; --warn-soft: #4A3A14;
+      --border: #24507A; --border-strong: #2F6193;
+      --shadow: 0 1px 2px rgba(0,0,0,.25), 0 4px 16px rgba(0,0,0,.25); --shimmer: rgba(255,255,255,.08);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font: 14px/1.5 var(--text);
+    background: var(--bg);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  button { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+  /* ---------- global brand bar ---------- */
+  .topbar {
+    background: var(--brand);
+    color: var(--brand-ink);
+    height: 52px;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    padding: 0 20px;
+    position: sticky; top: 0; z-index: 30;
+  }
+  .logo { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-weight: 800; font-size: 15px; letter-spacing: -0.01em; color: var(--brand-ink); white-space: nowrap; }
+  .logo-mark { width: 26px; height: 26px; border-radius: 3px; background: linear-gradient(135deg, #3B82F6, #1D4ED8); display: grid; place-items: center; color: #fff; font-size: 13px; }
+  .logo small { font-weight: 500; color: var(--brand-muted); margin-left: 6px; padding-left: 10px; border-left: 1px solid rgba(255,255,255,.18); }
+  .gnav { display: flex; gap: 2px; margin-left: 8px; }
+  .gnav a { color: var(--brand-muted); padding: 6px 12px; border-radius: var(--r); font-weight: 500; white-space: nowrap; }
+  .gnav a:hover { color: var(--brand-ink); background: rgba(255,255,255,.06); text-decoration: none; }
+  .gnav a[aria-current="page"] { color: var(--brand-ink); background: rgba(255,255,255,.12); }
+  .search {
+    margin-left: auto; display: flex; align-items: center; gap: 8px;
+    background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12);
+    border-radius: var(--r); padding: 0 10px; height: 32px; width: 320px; color: var(--brand-muted);
+  }
+  .search input { background: transparent; border: 0; color: var(--brand-ink); flex: 1; font: inherit; min-width: 0; }
+  .search input::placeholder { color: var(--brand-muted); }
+  .search kbd { font-family: var(--mono); font-size: 11px; border: 1px solid rgba(255,255,255,.2); border-radius: 3px; padding: 0 5px; }
+  .top-actions { display: flex; align-items: center; gap: 6px; }
+  .icon-btn { width: 32px; height: 32px; border-radius: var(--r); border: 0; background: transparent; color: var(--brand-muted); display: grid; place-items: center; cursor: pointer; position: relative; }
+  .icon-btn:hover { background: rgba(255,255,255,.08); color: var(--brand-ink); }
+  .icon-btn .dot { position: absolute; top: 6px; right: 7px; width: 7px; height: 7px; border-radius: 50%; background: #F59E0B; border: 2px solid var(--brand); }
+  .avatar { width: 30px; height: 30px; border-radius: 50%; background: #C7D2FE; color: #1E1B4B; display: grid; place-items: center; font-weight: 600; font-size: 12px; margin-left: 6px; }
+  .tenant { font-size: 12px; color: var(--brand-muted); margin-left: 4px; display: flex; align-items: center; gap: 6px; }
+
+  /* ---------- shell ---------- */
+  .shell { display: grid; grid-template-columns: 232px 1fr; min-height: calc(100vh - 52px); }
+  .sidenav { background: var(--surface); border-right: 1px solid var(--border); padding: 16px 12px; position: sticky; top: 52px; height: calc(100vh - 52px); overflow-y: auto; }
+  .sidenav h6 { margin: 14px 8px 6px; font: 600 11px/1 var(--text); letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+  .sidenav h6:first-child { margin-top: 0; }
+  .sidenav a { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--r); color: var(--ink); font-weight: 500; }
+  .sidenav a:hover { background: var(--surface-2); text-decoration: none; }
+  .sidenav a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); }
+  .sidenav a .cnt { margin-left: auto; color: var(--faint); font-size: 12px; }
+  .sidenav .ico { width: 16px; height: 16px; color: var(--faint); flex: none; }
+  .sidenav a[aria-current="page"] .ico { color: var(--accent); }
+  .sidenav .sub a { padding-left: 32px; font-weight: 400; }
+  .side-foot { margin-top: 24px; padding: 12px 8px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+  .side-foot b { display: block; color: var(--ink); font-weight: 600; }
+  .quota { height: 4px; background: var(--border); border-radius: 2px; margin: 8px 0 4px; overflow: hidden; }
+  .quota i { display: block; height: 100%; width: 71%; background: var(--accent); }
+
+  main { min-width: 0; }
+
+  /* ---------- secondary bar: breadcrumbs + actions ---------- */
+  .pagebar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 10px 28px; display: flex; align-items: center; gap: 12px; }
+  .crumbs { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 13px; }
+  .crumbs a { color: var(--muted); }
+  .crumbs span[aria-current] { color: var(--ink); font-weight: 500; }
+  .crumbs .sep { color: var(--border-strong); }
+  .pagebar .right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .btn { height: 32px; padding: 0 12px; border-radius: var(--r); border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink); font-weight: 500; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap; }
+  .btn:hover { background: var(--surface-2); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { filter: brightness(.95); }
+  .btn.ghost { border-color: transparent; }
+  .btn svg { width: 14px; height: 14px; }
+
+  /* ---------- page header ---------- */
+  .content { padding: 24px 28px 48px; max-width: 1480px; }
+  .eyebrow { font: 600 11px/1 var(--text); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; display: flex; gap: 10px; align-items: center; }
+  .eyebrow .pill { font-weight: 600; letter-spacing: 0; text-transform: none; font-size: 11px; padding: 2px 7px; border-radius: 10px; background: var(--positive-soft); color: var(--positive); }
+  .head { display: flex; align-items: flex-start; gap: 24px; }
+  .head h1 { font: 700 32px/1.15 var(--display); letter-spacing: -0.02em; margin: 0 0 6px; }
+  .head p { margin: 0; color: var(--muted); max-width: 70ch; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 22px; margin-top: 14px; font-size: 13px; color: var(--muted); }
+  .meta b { color: var(--ink); font-weight: 500; }
+  .meta .who { display: inline-flex; align-items: center; gap: 6px; }
+  .meta .who i { width: 18px; height: 18px; border-radius: 50%; background: #FCD5B4; color: #7C2D12; font: 600 9px/18px var(--text); text-align: center; font-style: normal; }
+  .status {
+    margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--muted); padding: 6px 10px; border-radius: var(--r); border: 1px solid var(--border); background: var(--surface);
+  }
+  .status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+  .status[data-state="loading"]::before { background: var(--warn); animation: pulse 1.2s infinite; }
+  .status[data-state="ready"] { color: var(--positive); border-color: var(--positive-soft); background: var(--positive-soft); }
+  .status[data-state="ready"]::before { background: var(--positive); }
+  .status[data-state="error"] { color: var(--negative); border-color: var(--negative-soft); background: var(--negative-soft); }
+  .status[data-state="error"]::before { background: var(--negative); }
+  @keyframes pulse { 50% { opacity: .35; } }
+
+  /* ---------- tabs ---------- */
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 22px 0 20px; }
+  .tabs a { padding: 8px 12px 10px; color: var(--muted); font-weight: 500; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .tabs a:hover { color: var(--ink); text-decoration: none; }
+  .tabs a[aria-current="page"] { color: var(--accent); border-color: var(--accent); }
+
+  /* ---------- KPI strip ---------- */
+  .kpis { display: grid; grid-template-columns: repeat(5, 1fr); border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); overflow: hidden; }
+  .kpi { padding: 14px 18px; border-right: 1px solid var(--border); }
+  .kpi:last-child { border-right: 0; }
+  .kpi .l { font-size: 12px; color: var(--muted); font-weight: 500; display: flex; justify-content: space-between; }
+  .kpi .v { font: 500 26px/1.2 var(--mono); font-variant-numeric: tabular-nums; margin: 6px 0 4px; letter-spacing: -0.01em; }
+  .kpi .d { font-size: 12px; font-family: var(--mono); font-variant-numeric: tabular-nums; display: flex; gap: 6px; align-items: center; }
+  .kpi .d span { color: var(--faint); font-family: var(--text); }
+  .up { color: var(--positive); } .down { color: var(--negative); }
+  .spark { height: 22px; width: 72px; margin-left: auto; }
+  .spark path { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+
+  /* ---------- filter bar ---------- */
+  .filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 20px 0 12px; }
+  .chip { height: 30px; padding: 0 10px 0 12px; border: 1px solid var(--border-strong); border-radius: 15px; background: var(--surface); display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+  .chip b { font-weight: 600; }
+  .chip svg { width: 12px; height: 12px; color: var(--faint); }
+  .chip.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .filters .reset { margin-left: 4px; font-size: 13px; }
+  .filters .view { margin-left: auto; display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--r); overflow: hidden; }
+  .filters .view button { border: 0; background: var(--surface); padding: 0 10px; height: 30px; cursor: pointer; color: var(--muted); }
+  .filters .view button[aria-pressed="true"] { background: var(--surface-2); color: var(--ink); font-weight: 500; }
+
+  /* ---------- viz stage ---------- */
+  .stage { margin-top: 28px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); box-shadow: var(--shadow); }
+  .stage-head { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  .stage-head h2 { margin: 0; font: 600 15px/1.3 var(--display); }
+  .stage-head .src { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+  .stage-head .src i { width: 14px; height: 14px; border-radius: 3px; background: #E97627; display: inline-block; font-style: normal; }
+  .stage-head .tools { margin-left: auto; display: flex; gap: 4px; }
+  .stage-head .tools .btn { height: 28px; padding: 0 8px; font-size: 13px; }
+  .viz-wrap { position: relative; overflow-x: auto; overflow-y: hidden; padding: 8px; min-height: 300px; }
+  tableau-viz { display: block; }
+  .overlay { position: absolute; inset: 8px; display: none; align-items: center; justify-content: center; text-align: center; }
+  .stage[data-state="loading"] .overlay.loading { display: flex; }
+  .stage[data-state="error"] .overlay.error { display: flex; }
+  .stage[data-state="error"] tableau-viz { visibility: hidden; }
+  .status[data-state="waiting"] { color: var(--warn); border-color: var(--warn-soft); background: var(--warn-soft); }
+  .status[data-state="waiting"]::before { background: var(--warn); animation: pulse 1.2s infinite; }
+  .skeleton { position: absolute; inset: 0; background: var(--surface-2); overflow: hidden; }
+  .skeleton::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--shimmer), transparent); transform: translateX(-100%); animation: shimmer 1.4s infinite; }
+  .skeleton .bar { position: absolute; background: var(--border); border-radius: 3px; }
+  @keyframes shimmer { to { transform: translateX(100%); } }
+  .overlay .msg { position: relative; z-index: 1; background: var(--surface); border: 1px solid var(--border); padding: 14px 18px; border-radius: var(--r); font-size: 13px; color: var(--muted); max-width: 46ch; }
+  .overlay.error .msg { border-color: var(--negative); color: var(--ink); }
+  .overlay.error .msg b { color: var(--negative); display: block; margin-bottom: 4px; }
+  .stage-foot { display: flex; gap: 18px; align-items: center; padding: 8px 14px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+  .stage-foot .num { color: var(--ink); }
+  .stage-foot .right { margin-left: auto; display: flex; gap: 14px; }
+
+  /* ---------- lower grid ---------- */
+  .grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 28px 40px; margin-top: 36px; }
+  section h3 { font: 700 16px/1.3 var(--display); letter-spacing: -0.01em; margin: 0 0 12px; display: flex; align-items: baseline; gap: 10px; }
+  section h3 .more { margin-left: auto; font: 500 13px/1 var(--text); }
+  .note { display: grid; grid-template-columns: 32px 1fr; gap: 12px; padding: 14px 0; border-top: 1px solid var(--border); }
+  .note:first-of-type { border-top: 0; padding-top: 0; }
+  .note .av { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; font-weight: 600; font-size: 12px; }
+  .note .by { font-size: 13px; display: flex; gap: 8px; align-items: baseline; }
+  .note .by b { font-weight: 600; }
+  .note .by time { color: var(--faint); font-size: 12px; }
+  .note p { margin: 4px 0 0; color: var(--ink); }
+  .note .tag { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 3px; background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); margin-right: 6px; }
+  .note .acts { margin-top: 8px; font-size: 12px; color: var(--muted); display: flex; gap: 14px; }
+  .composer { margin-top: 14px; display: flex; gap: 10px; }
+  .composer input { flex: 1; height: 36px; border: 1px solid var(--border-strong); border-radius: var(--r); padding: 0 12px; background: var(--surface); color: var(--ink); font: inherit; }
+
+  table.list { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.list th { text-align: left; font-weight: 500; color: var(--faint); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; padding: 0 10px 8px 0; border-bottom: 1px solid var(--border); }
+  table.list td { padding: 9px 10px 9px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table.list tr:last-child td { border-bottom: 0; }
+  table.list td.r, table.list th.r { text-align: right; padding-right: 0; }
+  table.list .name { font-weight: 500; }
+  table.list .sub { color: var(--muted); font-size: 12px; }
+
+  .timeline { list-style: none; margin: 0; padding: 0; }
+  .timeline li { display: grid; grid-template-columns: 14px 1fr; gap: 10px; padding: 0 0 14px; position: relative; font-size: 13px; }
+  .timeline li::before { content: ""; position: absolute; left: 6px; top: 16px; bottom: -2px; width: 1px; background: var(--border); }
+  .timeline li:last-child::before { display: none; }
+  .timeline .pt { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border-strong); background: var(--surface); margin-top: 3px; }
+  .timeline .pt.ok { border-color: var(--positive); }
+  .timeline .pt.warn { border-color: var(--warn); }
+  .timeline time { display: block; color: var(--faint); font-size: 12px; }
+
+  dl.facts { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 8px 18px; font-size: 13px; }
+  dl.facts dt { color: var(--muted); }
+  dl.facts dd { margin: 0; font-weight: 500; }
+  .badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 3px; font-weight: 600; }
+  .badge.ok { background: var(--positive-soft); color: var(--positive); }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); }
+
+  .band { margin-top: 40px; background: var(--brand); color: var(--brand-ink); border-radius: var(--r); padding: 22px 26px; display: grid; grid-template-columns: 1fr auto; gap: 20px; align-items: center; }
+  .band h3 { margin: 0 0 4px; font: 700 18px/1.3 var(--display); }
+  .band p { margin: 0; color: var(--brand-muted); max-width: 70ch; }
+  .band .btn { background: transparent; border-color: rgba(255,255,255,.3); color: var(--brand-ink); }
+
+  footer { border-top: 1px solid var(--border); padding: 18px 28px; display: flex; gap: 20px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+  footer a { color: var(--muted); }
+  footer .r { margin-left: auto; }
+
+  @media (max-width: 1180px) {
+    .kpis { grid-template-columns: repeat(3, 1fr); }
+    .kpi:nth-child(3n) { border-right: 0; }
+    .kpi:nth-child(n+4) { border-top: 1px solid var(--border); }
+    .grid { grid-template-columns: 1fr; }
+    .gnav a:nth-child(n+5) { display: none; }
+  }
+  @media (max-width: 900px) {
+    .shell { grid-template-columns: 1fr; }
+    .sidenav { display: none; }
+    .search { display: none; }
+    .tenant { display: none; }
+    .gnav a:nth-child(n+4) { display: none; }
+    .content, .pagebar, footer { padding-left: 16px; padding-right: 16px; }
+    .kpis { grid-template-columns: 1fr 1fr; }
+    .kpi { border-right: 1px solid var(--border) !important; }
+    .kpi:nth-child(2n) { border-right: 0 !important; }
+    .kpi:nth-child(n+3) { border-top: 1px solid var(--border); }
+    .head { flex-direction: column; gap: 12px; }
+    .status { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <a class="logo" href="#"><span class="logo-mark">N</span>Northgate<small>Insights Hub</small></a>
+  <nav class="gnav" aria-label="Global">
+    <a href="#">Home</a>
+    <a href="#" aria-current="page">Dashboards</a>
+    <a href="#">Reports</a>
+    <a href="#">Data Sources</a>
+    <a href="#">Alerts</a>
+    <a href="#">Admin</a>
+  </nav>
+  <label class="search">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input type="search" placeholder="Search dashboards, customers, SKUs…" aria-label="Search">
+    <kbd>⌘K</kbd>
+  </label>
+  <div class="top-actions">
+    <button class="icon-btn" aria-label="Help"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 .9-1 1.7M12 17h.01"/></svg></button>
+    <button class="icon-btn" aria-label="Notifications, 3 unread"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10 21h4"/></svg><span class="dot"></span></button>
+    <span class="tenant">EMEA · Production</span>
+    <span class="avatar" title="Signed in">JM</span>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="sidenav" aria-label="Workspace">
+    <h6>Favorites</h6>
+    <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 3 2.8 5.8 6.2.9-4.5 4.4 1.1 6.3L12 17.4 6.4 20.4l1.1-6.3L3 9.7l6.2-.9z"/></svg>Executive Summary</a>
+    <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 3 2.8 5.8 6.2.9-4.5 4.4 1.1 6.3L12 17.4 6.4 20.4l1.1-6.3L3 9.7l6.2-.9z"/></svg>Weekly Pipeline</a>
+
+    <h6>Sales Performance</h6>
+    <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>Overview</a>
+    <div class="sub">
+      <a href="#" aria-current="page">Customers <span class="cnt">live</span></a>
+      <a href="#">Products</a>
+      <a href="#">Orders</a>
+      <a href="#">Shipping</a>
+      <a href="#">Returns</a>
+      <a href="#">Forecast <span class="cnt">beta</span></a>
+    </div>
+
+    <h6>Finance</h6>
+    <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 20h18M6 16V9M11 16V5M16 16v-6M21 16v-3"/></svg>Margin Analysis</a>
+    <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M8 2v4M16 2v4"/></svg>Monthly Close</a>
+
+    <h6>Operations</h6>
+    <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h13v10H3zM16 10h3l2 3v4h-5z"/><circle cx="7" cy="18" r="1.5"/><circle cx="18" cy="18" r="1.5"/></svg>Fulfilment SLA</a>
+    <a href="#"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4zM4 9h16M9 9v11"/></svg>Inventory Health <span class="cnt">2</span></a>
+
+    <div class="side-foot">
+      <b>Workspace: Sales Ops</b>
+      Extract refreshes · 71 of 100 daily
+      <div class="quota"><i></i></div>
+      Next refresh 05:30 IST
+    </div>
+  </nav>
+
+  <main>
+    <div class="pagebar">
+      <nav class="crumbs" aria-label="Breadcrumb">
+        <a href="#">Dashboards</a><span class="sep">/</span>
+        <a href="#">Sales Performance</a><span class="sep">/</span>
+        <a href="#">Superstore</a><span class="sep">/</span>
+        <span aria-current="page">Customers</span>
+      </nav>
+      <div class="right">
+        <button class="btn ghost" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 3 2.8 5.8 6.2.9-4.5 4.4 1.1 6.3L12 17.4 6.4 20.4l1.1-6.3L3 9.7l6.2-.9z"/></svg>Favorite</button>
+        <button class="btn" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10 21h4"/></svg>Subscribe</button>
+        <button class="btn" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12M7 8l5-5 5 5M4 21h16"/></svg>Export</button>
+        <button class="btn primary" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/></svg>Share</button>
+      </div>
+    </div>
+
+    <div class="content">
+      <p class="eyebrow">Sales Performance <span class="pill">Certified</span> <span>FY26 · Q3</span></p>
+      <div class="head">
+        <div>
+          <h1>Customer Analysis</h1>
+          <p>Customer-level sales, profit and order behaviour across Consumer, Corporate and Home Office segments. Use the scatter to spot high-volume, low-margin accounts and hand them to the account team.</p>
+          <div class="meta">
+            <span class="who"><i>PR</i> Owner <b>Priya Raman</b></span>
+            <span>Data refreshed <b id="refreshed">Today, 05:31 IST</b></span>
+            <span>Source <b>Sample – Superstore (extract)</b></span>
+            <span>Viewed <b class="num">1,284</b> times this quarter</span>
+          </div>
+        </div>
+        <output id="status" class="status" data-state="loading" for="tableau-viz">Loading dashboard…</output>
+      </div>
+
+      <div class="stage" id="stage" data-state="loading">
+        <div class="stage-head">
+          <h2 id="sheet-title">Customers</h2>
+          <span class="src"><i></i> Tableau Cloud · Superstore</span>
+          <div class="tools">
+            <button class="btn ghost" type="button" id="btn-refresh">Refresh data</button>
+            <button class="btn ghost" type="button" id="btn-reset">Revert</button>
+            <button class="btn ghost" type="button" id="btn-full">Full screen</button>
+          </div>
+        </div>
+        <div class="viz-wrap">
+          <tableau-viz
+            id="tableau-viz"
+            src="https://prod-in-a.online.tableau.com/t/prinostaged-886a46416e/views/Superstore/Customers"
+            width="100%"
+            height="683"
+            toolbar="bottom"
+          ></tableau-viz>
+          <div class="overlay loading" aria-hidden="true">
+            <div class="skeleton">
+              <span class="bar" style="left:4%;top:5%;width:30%;height:14px"></span>
+              <span class="bar" style="left:4%;top:12%;width:92%;height:1px"></span>
+              <span class="bar" style="left:4%;top:18%;width:62%;height:56%"></span>
+              <span class="bar" style="left:70%;top:18%;width:26%;height:18%"></span>
+              <span class="bar" style="left:70%;top:40%;width:26%;height:34%"></span>
+              <span class="bar" style="left:4%;top:80%;width:92%;height:12%"></span>
+            </div>
+            <div class="msg">Connecting to Tableau Cloud…</div>
+          </div>
+          <div class="overlay error" role="alert">
+            <div class="msg"><b>The dashboard could not be loaded.</b><span id="error-text">Sign in to Tableau Cloud in this browser, then reload the page.</span></div>
+          </div>
+        </div>
+        <div class="stage-foot">
+          <span>Active sheet <span class="num" id="active-sheet">—</span></span>
+          <div class="right">
+            <span>Embedding API <span class="num">v3</span></span>
+            <span>Load <span class="num" id="load-ms">—</span></span>
+          </div>
+        </div>
+      </div>
+
+
+            </div>
+
+    <footer>
+      <span>© 2026 Northgate Office Supply Ltd.</span>
+      <a href="#">Help centre</a>
+      <a href="#">Data policy</a>
+      <a href="#">Service status</a>
+      <a href="#">Release notes</a>
+      <span class="r">Insights Hub <span class="num">4.12.0</span> · Region EMEA</span>
+    </footer>
+  </main>
+</div>
+
+<script type="module">
+  const viz = document.getElementById('tableau-viz');
+  const stage = document.getElementById('stage');
+  const status = document.getElementById('status');
+  const activeSheet = document.getElementById('active-sheet');
+  const sheetTitle = document.getElementById('sheet-title');
+  const loadMs = document.getElementById('load-ms');
+  const errorText = document.getElementById('error-text');
+  const t0 = performance.now();
+
+  const set = (state, text) => {
+    stage.dataset.state = state;
+    status.dataset.state = state;
+    status.textContent = text;
+  };
+
+  // Tableau fires neither firstinteractive nor vizloaderror when it answers the
+  // session bootstrap with 401 and renders its sign-in page inside the frame.
+  // Lift the skeleton after a grace period so that page is visible.
+  const LOADING_GRACE_MS = 6000;
+  setTimeout(() => {
+    if (stage.dataset.state === 'loading') {
+      set('waiting', 'Waiting for Tableau sign-in');
+      console.warn('[tableau-embed] no firstinteractive after %d ms — Tableau session missing or third-party cookies blocked', LOADING_GRACE_MS);
+    }
+  }, LOADING_GRACE_MS);
+
+  viz.addEventListener('firstinteractive', () => {
+    const sheet = viz.workbook.activeSheet;
+    set('ready', 'Live');
+    activeSheet.textContent = `${sheet.name} (${sheet.sheetType})`;
+    sheetTitle.textContent = sheet.name;
+    loadMs.textContent = `${Math.round(performance.now() - t0)} ms`;
+    window.viz = viz;
+  });
+
+  viz.addEventListener('vizloaderror', (e) => {
+    set('error', 'Unavailable');
+    errorText.textContent = 'Sign in to Tableau Cloud in this browser, then reload the page.';
+    console.error('[tableau-embed]', e.detail ?? e);
+  });
+
+  viz.addEventListener('tabswitched', (e) => {
+    const name = e.detail?.newSheetName;
+    if (name) { activeSheet.textContent = name; sheetTitle.textContent = name; }
+  });
+
+  document.getElementById('btn-refresh').addEventListener('click', () => viz.refreshDataAsync?.());
+  document.getElementById('btn-reset').addEventListener('click', () => viz.revertAllAsync?.());
+  document.getElementById('btn-full').addEventListener('click', () => stage.requestFullscreen?.());
+</script>
+</body>
+</html>
