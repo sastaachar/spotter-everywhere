@@ -733,10 +733,27 @@
   // most of the wait on a page built largely of them.
   const SINGLE_VALUE_VISUALS = new Set(['card', 'kpi', 'multiRowCard', 'gauge']);
 
-  // Below this a text box is a label or a heading — "REGIONAL SALES", a page
-  // title — which is chrome the liveboard supplies for itself. Above it, the
-  // text is content: a narrative, a caption, an explanation worth carrying.
-  const TEXT_TILE_MIN_CHARS = 40;
+  // A note tile is a paragraph, not a caption. Below this a text box is a
+  // heading ("REGIONAL SALES"), a control's label ("WHAT IF the forecast was
+  // adjusted by 0%?") or an instruction about the report's own interactions —
+  // none of which mean anything once the data is in a liveboard. A narrative
+  // worth carrying runs well past this.
+  const TEXT_TILE_MIN_CHARS = 120;
+
+  /**
+   * Whether a result is built on Power BI's "Blank" placeholder.
+   *
+   * Power BI names a placeholder field `<table>.Blank` — the stand-in a what-if
+   * parameter's readout is bound to, and what it gives a visual that has no real
+   * breakdown. It can land on either side: as the category, or inside the
+   * measure as `Sum(Forecast Adjustment.Blank)`. Either way there is no report
+   * data behind it, so it is not something to draw.
+   */
+  function isPlaceholderResult(columns, rows) {
+    if (columns.some((c) => /\.Blank\b/i.test(c.name || ''))) return true;
+    // Or the category column exists but holds nothing in any row.
+    return rows.every((row) => row[0] === null || row[0] === undefined || row[0] === '');
+  }
 
   /** Visual types that are a grid of rows rather than a drawn chart. */
   const GRID_VISUALS = new Set(['tableEx', 'pivotTable', 'matrix']);
@@ -861,6 +878,9 @@
       }
       // One row is a single data point whatever visual drew it — nothing to plot.
       if (rows.length < 2) { skipped.push(label); continue; }
+      // A visual bound to Power BI's "Blank" placeholder has no report data
+      // behind it — see isPlaceholderResult.
+      if (isPlaceholderResult(result.columns, rows)) { skipped.push(label); continue; }
       datasets.push({
         page: v.page,
         title: distinct(v.title || nameFromColumns(result.columns, v.visualType, label)),

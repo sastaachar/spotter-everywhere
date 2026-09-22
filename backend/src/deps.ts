@@ -94,10 +94,13 @@ export function makeDeps(options: AppOptions): Deps {
     const dataset = await uploadCsvDataset(env, rowsToCsv(columns, rows), tableName);
     const tableId = dataset.tableId ?? (await findMetadataId(env, tableName));
     let worksheetId = await findMetadataId(env, wsName, 'LOGICAL_TABLE');
-    // A rebuilt table leaves its worksheet pointing at the dropped one, and the
-    // tiles then fail with "the visualisation data could not be retrieved".
-    // Drop the stale worksheet so it is regenerated over the new table.
-    if (worksheetId && dataset.recreated) {
+    // Drop any existing worksheet so it is regenerated over the table that was
+    // just loaded. Reusing it made a rebuild cheap but meant it never caught up
+    // with its own source: a recreated table left it pointing at the dropped one
+    // ("the visualisation data could not be retrieved"), and a column that
+    // gained a currency or percentage format kept showing a bare number,
+    // because the worksheet carrying that format was only ever written once.
+    if (worksheetId) {
       try {
         await deleteMetadata(env, worksheetId, 'LOGICAL_TABLE');
         worksheetId = undefined;
