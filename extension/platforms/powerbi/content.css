@@ -331,3 +331,28 @@
   box-shadow: -4px 0 16px rgba(0, 0, 0, 0.10); z-index: 2147483646;
   font: 13px/18px "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
 }
+
+/* Build chip on the report's own tab buttons. A report builds its tab strip out
+   of button visuals, so each one gets a small sparkle in its corner: press it
+   and that tab's page becomes a Liveboard. Small and quiet — it sits on top of
+   the report's own chrome and must not compete with it. */
+.ts-spotter-tab-btn {
+  all: initial;
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  user-select: none;
+  pointer-events: auto;
+}
+.ts-spotter-tab-btn svg { width: 11px; height: 11px; fill: #f2c811; }
+.ts-spotter-tab-btn:hover { background: #ffffff; transform: scale(1.12); }
+.ts-spotter-tab-btn:disabled { opacity: 0.5; cursor: default; }
+.ts-spotter-tab-btn:focus-visible { outline: 2px solid #f2c811; outline-offset: 1px; }

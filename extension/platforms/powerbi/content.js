@@ -8,6 +8,7 @@
   const VISUAL_CONTAINER_SELECTOR = '.visualContainer';
   const INJECTED_ATTR = 'data-ts-spotter';
   const BUTTON_CLASS = 'ts-spotter-btn';
+  const TAB_BUTTON_CLASS = 'ts-spotter-tab-btn';
   const LAYER_CLASS = 'ts-spotter-layer';
   const PANEL_CLASS = 'ts-spotter-panel';
   const OPEN_EVENT = 'spotter:open';
@@ -358,29 +359,114 @@
     btn.innerHTML = SPARKLE_SVG;
     btn.appendChild(label);
 
-    btn.addEventListener('click', async () => {
-      if (btn.disabled) return;
-      btn.disabled = true;
-
-      closePanel();
-      const overlay = document.createElement('aside');
-      overlay.className = FRAME_CLASS + ' ts-spotter-loading';
-      document.body.appendChild(overlay);
-      const setStep = buildChecklist(overlay, 'Building your Liveboard', LIVEBOARD_STEPS);
-
-      try {
-        const liveboardId = await buildLiveboard(reportContext(), setStep);
-        setStep('open', 'active');
-        overlay.remove();
-        btn.disabled = false;
-        openSpotter({ ...reportContext(), liveboardId });
-      } catch (err) {
-        setStep('build', 'error', err.message.slice(0, 80));
-        // Leave the failure on screen long enough to read, then clear it.
-        setTimeout(() => { overlay.remove(); btn.disabled = false; }, 8000);
-      }
-    });
+    btn.addEventListener('click', () => runLiveboard(btn));
     document.body.appendChild(btn);
+  }
+
+  /** Build the open page's liveboard and show it, with the checklist running. */
+  async function runLiveboard(btn) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+
+    closePanel();
+    const overlay = document.createElement('aside');
+    overlay.className = FRAME_CLASS + ' ts-spotter-loading';
+    document.body.appendChild(overlay);
+    const setStep = buildChecklist(overlay, 'Building your Liveboard', LIVEBOARD_STEPS);
+
+    try {
+      const liveboardId = await buildLiveboard(reportContext(), setStep);
+      setStep('open', 'active');
+      overlay.remove();
+      btn.disabled = false;
+      openSpotter({ ...reportContext(), liveboardId });
+    } catch (err) {
+      setStep('build', 'error', err.message.slice(0, 80));
+      // Leave the failure on screen long enough to read, then clear it.
+      setTimeout(() => { overlay.remove(); btn.disabled = false; }, 8000);
+    }
+  }
+
+  // The report's own tab strip, whatever shape it takes. A report builds its
+  // tabs from button visuals, and how a button gets you to its page — page
+  // navigation, a bookmark, a drill-through — is its own business and is not
+  // always declared anywhere readable. So rather than decoding the target, the
+  // chip presses the report's button and builds whatever page that lands on.
+  // That works for every navigation style, including ones not seen yet.
+  const MIN_TAB_BUTTON_WIDTH = 60;
+  const tabChips = new Map();
+
+  function tabButtons() {
+    return canvasVisuals().filter((cv) => {
+      const layout = matched.get(cv.el);
+      if (!layout || layout.visualType !== 'actionButton' || !layout.label) return false;
+      // The narrow ones are scroll helpers stacked down the side of a visual.
+      return cv.rect.w >= MIN_TAB_BUTTON_WIDTH;
+    });
+  }
+
+  /**
+   * Press one of the report's own buttons, the way a person would.
+   *
+   * A synthetic `click` on the container does nothing: Power BI's buttons listen
+   * for the pointer sequence, and the element that handles it is not the one the
+   * layout describes. So aim at the middle of the button, ask the document what
+   * is actually there, and send that element the full sequence. The chip layer
+   * is lifted out of the way first or it would answer instead of the report.
+   */
+  function pressReportButton(cv) {
+    const layer = document.querySelector('.' + LAYER_CLASS);
+    const wasDisplay = layer ? layer.style.display : null;
+    if (layer) layer.style.display = 'none';
+    const x = cv.rect.x + cv.rect.w / 2;
+    const y = cv.rect.y + cv.rect.h / 2;
+    const target = document.elementFromPoint(x, y) || cv.container || cv.el;
+    if (layer) layer.style.display = wasDisplay;
+    const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0 };
+    ['pointerover', 'pointerenter', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']
+      .forEach((type) => {
+        const Ctor = type.startsWith('pointer') && window.PointerEvent ? PointerEvent : MouseEvent;
+        target.dispatchEvent(new Ctor(type, type.startsWith('pointer')
+          ? { ...opts, pointerId: 1, pointerType: 'mouse', isPrimary: true }
+          : opts));
+      });
+  }
+
+  /** Wait for the report to finish moving to another page. */
+  function pageSettled(before) {
+    return new Promise((resolve) => {
+      const started = Date.now();
+      const tick = () => {
+        const moved = currentPageName() !== before;
+        // Give the new page a moment to lay its visuals out before reading it.
+        if (moved) return setTimeout(resolve, 1200);
+        if (Date.now() - started > 4000) return resolve();
+        setTimeout(tick, 200);
+      };
+      tick();
+    });
+  }
+
+  function buildTabChip(cv) {
+    const layout = matched.get(cv.el);
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = TAB_BUTTON_CLASS;
+    chip.title = 'Build a Liveboard for "' + layout.label + '"';
+    chip.setAttribute('aria-label', 'Build a Liveboard for ' + layout.label);
+    chip.innerHTML = SPARKLE_SVG;
+    chip.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (chip.disabled) return;
+      const before = currentPageName();
+      chip.disabled = true;
+      pressReportButton(cv);
+      await pageSettled(before);
+      chip.disabled = false;
+      runLiveboard(chip);
+    });
+    return chip;
   }
 
   /** Report-level context: the page, not any single visual. */
@@ -463,12 +549,47 @@
       btn.remove();
       placed.delete(titleEl);
     });
+
+    const liveTabs = new Set();
+    tabButtons().forEach((cv) => {
+      liveTabs.add(cv.el);
+      let chip = tabChips.get(cv.el);
+      if (!chip) {
+        chip = buildTabChip(cv);
+        layer.appendChild(chip);
+        tabChips.set(cv.el, chip);
+      }
+      positionChip(chip, cv.rect, frame);
+    });
+    tabChips.forEach((chip, el) => {
+      if (liveTabs.has(el) && el.isConnected) return;
+      chip.remove();
+      tabChips.delete(el);
+    });
+  }
+
+  /** Pin a tab chip to the top-right corner of its tab button. */
+  function positionChip(chip, rect, frame) {
+    const onCanvas = frame
+      && rect.w > 0 && rect.h > 0
+      && rect.y + rect.h > frame.top && rect.y < frame.bottom
+      && rect.x + rect.w > frame.left && rect.x < frame.right;
+    chip.style.display = onCanvas ? 'inline-flex' : 'none';
+    if (!onCanvas) return;
+    const w = chip.offsetWidth || 18;
+    chip.style.left = Math.round(rect.x + rect.w - w - 2 - frame.left) + 'px';
+    chip.style.top = Math.round(rect.y + 2 - frame.top) + 'px';
   }
 
   function reposition() {
     const frame = frameLayer(ensureLayer());
     placed.forEach((btn, titleEl) => {
       if (titleEl.isConnected) position(btn, titleEl, frame);
+    });
+    tabChips.forEach((chip, el) => {
+      if (!el.isConnected) return;
+      const rect = screenRect(el.querySelector(VISUAL_CONTAINER_SELECTOR)) || screenRect(el);
+      if (rect) positionChip(chip, rect, frame);
     });
   }
 
@@ -772,8 +893,8 @@
    * carries. A visual that answers no query but holds words becomes a note tile
    * instead of being dropped.
    */
-  async function reportDatasets(note) {
-    const pages = reportPages();
+  async function reportDatasets(note, onlySection) {
+    const pages = reportPages().filter((p) => !onlySection || p.section === onlySection);
     if (!pages.length) throw new Error('the report layout has not loaded yet');
     const rendered = renderedText();
     const wanted = [];
@@ -798,7 +919,7 @@
         });
       });
     });
-    if (!wanted.length) throw new Error('the report has no visuals to build from');
+    if (!wanted.length) throw new Error('this page has no visuals to build from');
 
     const datasets = [];
     const skipped = [];
@@ -844,7 +965,7 @@
         rows: rows.map((row) => row.map(loadableValue)),
       });
     }
-    if (!datasets.length) throw new Error('none of the visuals in this report returned anything');
+    if (!datasets.length) throw new Error('nothing on this page returned any data');
     // Surfaced by the caller, so a report that could not be mirrored in full
     // says which visuals are missing instead of quietly building a shorter board.
     datasets.skipped = skipped;
@@ -853,10 +974,12 @@
 
   async function buildLiveboard(context, setStep) {
     if (!context.reportId) throw new Error('no report id for this view');
-    // One liveboard per report, with a tab per page — so the key is the report.
-    // It was briefly keyed on the open page too, back when a build could only
-    // read the page on screen.
-    const guid = context.reportId;
+    // One liveboard per page, built when that page is asked for. Building the
+    // whole report in one go meant dozens of uploads and a wait of minutes
+    // before anything was visible; a page is seconds and is what the user is
+    // looking at. Each page keeps its own board, so the wait is never repeated.
+    const section = context.pageName || '';
+    const guid = section ? context.reportId + ':' + section : context.reportId;
 
     setStep('check', 'active');
     const found = await ask(GET_LIVEBOARD, { platform: PLATFORM, guid });
@@ -868,14 +991,13 @@
     }
     setStep('check', 'done', 'not built yet');
 
-    // The liveboard mirrors the whole report — every page, every visual — so it
-    // is built from real rows. The semantic model alone would describe the
+    // The liveboard mirrors this page — every visual on it, drawn as it is drawn
+    // there — from real rows. The semantic model alone would describe the
     // columns but carry no data, and every tile would read "No data found".
     setStep('read', 'active');
-    const datasets = await reportDatasets((detail) => setStep('read', 'active', detail));
+    const datasets = await reportDatasets((detail) => setStep('read', 'active', detail), section);
     const missed = datasets.skipped || [];
-    const pageCount = new Set(datasets.map((d) => d.page)).size;
-    setStep('read', 'done', datasets.length + ' visuals across ' + pageCount + ' pages'
+    setStep('read', 'done', datasets.length + ' visuals'
       + (missed.length ? ' (' + missed.length + ' with nothing to show)' : ''));
     if (missed.length) console.warn('[Power BI Spotter] not on the liveboard:', missed.join(', '));
 

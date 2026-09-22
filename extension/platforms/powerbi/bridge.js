@@ -129,6 +129,16 @@
     return text || null;
   }
 
+  /** The caption on a button visual. */
+  function buttonLabel(sv) {
+    const text = ((sv.objects || {}).text || [])
+      .map((o) => {
+        try { return o.properties.text.expr.Literal.Value.replace(/^'|'$/g, ''); } catch (e) { return ''; }
+      })
+      .filter(Boolean)[0];
+    return text || null;
+  }
+
   function visuals(ex) {
     const out = [];
     (ex.sections || []).forEach((section) => {
@@ -162,6 +172,10 @@
           // A text box keeps its words here rather than in any query, so this
           // is the only way to read them for a page that is not on screen.
           text: staticText(sv),
+          // A navigation button's caption — "Trends", "Pipeline". The report's
+          // own tab strip is built from these, so it is how the extension finds
+          // the tabs to hang a build button off.
+          label: buttonLabel(sv),
         });
       });
     });
