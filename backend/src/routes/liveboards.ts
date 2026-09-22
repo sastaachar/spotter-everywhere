@@ -5,7 +5,7 @@ import { extractTwbXml, parseTableauColumns, parseWorkbookStructure, type Column
 import { parseTmdlColumns } from '../powerbi';
 import { generateTml, generateLiveboardTml, generateLiveboardOverSources } from '../tml';
 import type { LiveboardSource } from '../tml';
-import { importTml, findGuid, importErrors, findMetadataId, shareMetadata } from '../thoughtspot';
+import { importTml, findGuid, importErrors, findMetadataId, shareMetadata, deleteMetadata } from '../thoughtspot';
 import { liveboardKey, buildLiveboard } from '../liveboard-pipeline';
 import type { Deps } from '../deps';
 
@@ -190,6 +190,7 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
     let filename = '';
     let bytes: Uint8Array | null = null;
     let text = '';
+    let rebuild = false;
     let dataInput: { columns: { name: string; type?: string; dataType?: string }[]; rows: unknown[][] } | null = null;
     // One entry per source visual: the liveboard gets a tile per visual, each
     // answering from a worksheet loaded with that visual's own rows.
@@ -199,6 +200,7 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
       platform = String(form.get('platform') ?? '');
       name = String(form.get('name') ?? '');
       guid = String(form.get('guid') ?? '');
+      rebuild = String(form.get('rebuild') ?? '') === 'true';
       const model = form.get('model');
       if (typeof model === 'string') text = model;
       const file = form.get('file');
@@ -211,6 +213,7 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
       platform = String(b.platform ?? '');
       name = String(b.name ?? '');
       guid = String(b.guid ?? '');
+      rebuild = b.rebuild === true || b.rebuild === 'true';
       filename = String(b.filename ?? '');
       text = String(b.model ?? '');
       if (typeof b.fileBase64 === 'string') bytes = Uint8Array.from(atob(b.fileBase64), (ch) => ch.charCodeAt(0));
@@ -257,23 +260,8 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
       emit(event);
     };
 
-    // 1. lookup — reuse an existing liveboard by name.
-    if (tsEnv) {
-      let existing;
-      try {
-        existing = await findMetadataId(tsEnv, name, 'LIVEBOARD');
-      } catch (e) {
-        stage('lookup', 'failed', (e as Error).message);
-        return c.json({ platform, name, reused: false, error: 'cluster_error', stages }, 502);
-      }
-      if (existing) {
-        stage('lookup', 'ok', 'found existing');
-        for (const s of ['parse', 'generate', 'import', 'locate']) stage(s, 'skipped');
-        return c.json({ platform, name, reused: true, liveboardId: existing, liveboardUrl: pinboardUrl(existing), stages }, 200);
-      }
-      stage('lookup', 'ok', 'not found');
-    } else {
-      stage('lookup', 'skipped', 'no cluster configured');
+    if (!tsEnv) {
+      return c.json({ error: 'not_configured', detail: 'TS_HOST and a token/secret must be set to build liveboards' }, 503);
     }
 
 
@@ -307,6 +295,18 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
     const buildFromDatasets = async (): Promise<{ status: 200 | 201 | 502; body: Record<string, unknown> }> => {
       // Only ever called behind `datasetsInput.length && tsEnv`.
       const env = tsEnv!;
+      // Reuse or recreate by name (the single-data path does this inside
+      // buildLiveboard; the multi-source path handles it here).
+      const existing = await findMetadataId(env, name, 'LIVEBOARD');
+      if (existing && !rebuild) {
+        stage('lookup', 'ok', 'reused existing');
+        return { status: 200, body: { platform, name, reused: true, liveboardId: existing, liveboardUrl: pinboardUrl(existing), stages } };
+      }
+      if (existing && rebuild) {
+        try { await deleteMetadata(env, existing, 'LIVEBOARD'); }
+        catch (e) { console.error('[create-liveboard] delete-before-rebuild failed:', (e as Error).message); }
+        stage('lookup', 'ok', 'deleted old — rebuilding');
+      }
       const sources: LiveboardSource[] = [];
       const loaded: { title: string; worksheetId: string }[] = [];
       for (const [i, ds] of datasetsInput.entries()) {
@@ -467,29 +467,21 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
     }
 
 
+    // A posted Tableau workbook lets the liveboard mirror its tabs + filters.
+    // (The actual data load happens inside buildLiveboard, once.)
     let structure: WorkbookStructure | null = null;
-
-    // Data path: load real rows via the CSV pipeline, then build the liveboard
-    // on that populated worksheet.
-    if (rows && tsEnv) {
-      let ws;
+    if (platform === 'tableau' && bytes && bytes.length) {
       try {
-        ws = await loadDataset(tsEnv, name + ' Data', columns, rows);
-        stage('load-data', ws.loaded ? 'ok' : 'failed', ws.worksheetId ? `worksheet ${ws.worksheetId}` : (ws.messages || []).join('; '));
+        structure = parseWorkbookStructure(extractTwbXml(bytes));
+        console.log(`[create-liveboard] structure: ${structure.dashboards.length} dashboards, ${Object.keys(structure.worksheets).length} worksheets`);
       } catch (e) {
         console.error('[create-liveboard] structure parse failed:', (e as Error).message);
       }
     }
 
-    // Everything below talks to the cluster, so stop here rather than passing a
-    // null env down the pipeline.
-    if (!tsEnv) {
-      return c.json({ error: 'not_configured', detail: 'TS_HOST and TS_TOKEN must be set to build a liveboard', stages }, 503);
-    }
-
     const hostBase = options.tsHost!.replace(/\/$/, '');
     const groups = options.tsUserGroups ?? [];
-    const params = { platform, name, columns, rows, structure };
+    const params = { platform, name, columns, rows, structure, rebuild };
 
     if (wantsStream) {
       c.header('Content-Type', 'application/x-ndjson; charset=utf-8');
