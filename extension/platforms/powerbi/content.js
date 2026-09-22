@@ -216,6 +216,12 @@
   // Progress checklist shown while the liveboard builds — same shape as the
   // Tableau one: each row spins while active and turns into a green check when
   // it completes, so a 60-second build shows what it is doing.
+  const SPOTTER_STEPS = [
+    { key: 'read', label: 'Reading this visual' },
+    { key: 'load', label: 'Loading it into ThoughtSpot' },
+    { key: 'open', label: 'Opening Spotter' },
+  ];
+
   const LIVEBOARD_STEPS = [
     { key: 'check', label: 'Checking ThoughtSpot' },
     { key: 'read', label: 'Reading the report' },
@@ -223,7 +229,7 @@
     { key: 'open', label: 'Opening the liveboard' },
   ];
 
-  function buildChecklist(container, title) {
+  function buildChecklist(container, title, defs) {
     container.textContent = '';
     const wrap = document.createElement('div');
     wrap.className = 'ts-spotter-steps';
@@ -232,7 +238,7 @@
     heading.textContent = title;
     wrap.appendChild(heading);
     const rows = {};
-    LIVEBOARD_STEPS.forEach((step) => {
+    (defs || LIVEBOARD_STEPS).forEach((step) => {
       const row = document.createElement('div');
       row.className = 'ts-spotter-step';
       row.dataset.state = 'pending';
@@ -283,7 +289,7 @@
       const overlay = document.createElement('aside');
       overlay.className = FRAME_CLASS + ' ts-spotter-loading';
       document.body.appendChild(overlay);
-      const setStep = buildChecklist(overlay, 'Building your Liveboard');
+      const setStep = buildChecklist(overlay, 'Building your Liveboard', LIVEBOARD_STEPS);
 
       try {
         const liveboardId = await buildLiveboard(reportContext(), setStep);
@@ -798,7 +804,8 @@
     closePanel();
     const loading = document.createElement('aside');
     loading.className = FRAME_CLASS + ' ts-spotter-loading';
-    loading.textContent = 'Loading this visual into Spotter\u2026';
+    const setStep = buildChecklist(loading, 'Setting up Spotter', SPOTTER_STEPS);
+    setStep('read', 'active');
     document.body.appendChild(loading);
     document.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: context }));
 
@@ -820,7 +827,8 @@
       // Already built (details panel route) — just embed it.
       if (context.worksheetId) return openPanelFrame({ userid, workspace: userid });
       if (!context.visualId) throw new Error('no visual id for this view');
-      loading.textContent = 'Loading \u201c' + (context.visualTitle || 'this visual') + '\u201d into ThoughtSpot\u2026';
+      setStep('read', 'done', context.visualTitle || 'this visual');
+      setStep('load', 'active');
       const result = await requestData(context.visualId, 'summary', MAX_LOAD_ROWS);
       const body = await createDataset(context, result);
       const worksheetId = (body.embed && body.embed.worksheetId)
@@ -829,8 +837,11 @@
       // workspace is the userid the embed authenticates as — keep it equal to
       // the one /dataset provisioned and shared for, or the model is invisible
       // and Spotter sits on a disabled send button.
+      setStep('load', 'done');
+      setStep('open', 'active');
       openPanelFrame({ worksheetId, worksheetName, userid, workspace: userid });
     } catch (err) {
+      setStep('load', 'error', err.message.slice(0, 60));
       openPanelFrame({ userid, workspace: userid, loadError: err.message });
     }
   }
