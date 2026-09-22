@@ -39,8 +39,38 @@ initSpotter({
  * Put a liveboard into `container`. Resolves once it has rendered, rejects if it
  * cannot — the caller decides what to show in its place.
  */
+/**
+ * Whether the cluster will talk to this page at all.
+ *
+ * ThoughtSpot only answers a browser whose origin it has been told to expect,
+ * so an embed from a page the cluster does not list fails as "Not logged in" —
+ * which reads like a sign-in problem and is really a one-line setting. Asking
+ * first turns that into something the person can act on.
+ */
+async function clusterAllowsThisOrigin() {
+  try {
+    await fetch(`${thoughtSpotConfig.host.replace(/\/$/, '')}/callosum/v1/session/info`, {
+      credentials: 'include',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+class OriginNotAllowed extends Error {
+  constructor() {
+    super(`This page's origin (${location.origin}) is not on the ThoughtSpot cluster's `
+      + 'allowlist, so the browser will not let it load a Liveboard. Add it under '
+      + 'Develop \u2192 Customizations \u2192 Security Settings, to both "CORS whitelisted '
+      + 'domains" and "CSP visual embed hosts".');
+    this.name = 'OriginNotAllowed';
+  }
+}
+
 async function mount(container, liveboardId, userid) {
   if (userid) currentUser = userid;
+  if (!(await clusterAllowsThisOrigin())) throw new OriginNotAllowed();
   container.textContent = '';
   const embed = new PowerBiLiveboardEmbed(container, { liveboardId });
   const rendered = new Promise((resolve, reject) => {
