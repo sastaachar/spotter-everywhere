@@ -321,9 +321,13 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
         // prefix — "Revenue won" and "Revenue Won and Revenue In Pipeline…" —
         // can truncate to near-identical worksheet names, and a tile then fails
         // to resolve its source. A short suffix keeps every worksheet distinct.
-        // It hashes the liveboard name as well as the title, so two report pages
-        // that both hold a "Revenue and forecast by Product" get their own.
-        const suffix = Array.from(`${name}·${ds.title}`)
+        //
+        // The source's own position is part of it. Titles are not unique: a page
+        // can hold several untitled visuals that describe themselves the same
+        // way, and when two shared a name the second reloaded the first's
+        // worksheet with its own columns — leaving the first tile pointing at
+        // columns that no longer existed, and the whole import rejected.
+        const suffix = Array.from(`${name}·${i}·${ds.title}`)
           .reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7)
           .toString(36).slice(0, 4);
         // Budget the title first. The prefix carries the report and page ids and

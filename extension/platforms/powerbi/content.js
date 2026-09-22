@@ -846,17 +846,21 @@
   // text is content: a narrative, a caption, an explanation worth carrying.
   const TEXT_TILE_MIN_CHARS = 40;
 
+  /** Visual types that are a grid of rows rather than a drawn chart. */
+  const GRID_VISUALS = new Set(['tableEx', 'pivotTable', 'matrix']);
+
   /** A name for a visual Power BI left untitled, from the data it is showing. */
-  function nameFromColumns(columns, fallback) {
+  function nameFromColumns(columns, visualType, fallback) {
     const names = (columns || []).map((c) => c.name).filter(Boolean);
     if (!names.length) return fallback;
     if (names.length === 1) return names[0];
-    // Power BI titles its own visuals "<measure> by <category>", so a chart's
-    // two or three columns read that way too. A wide grid does not — calling an
-    // eleven-column detail table "Discount by Account Name" describes two of its
-    // columns and hides the other nine.
-    if (names.length <= 3) return names[names.length - 1] + ' by ' + names[0];
-    return names[0] + ' details';
+    // A wide grid is a listing: calling an eleven-column detail table "Discount
+    // by Account Name" describes two of its columns and hides the other nine.
+    if (names.length > 3 && (!visualType || GRID_VISUALS.has(visualType))) return names[0] + ' details';
+    // Everything else is drawn against an axis, and Power BI names those
+    // "<measure> by <category>" — the last column is the measure, the first the
+    // category — so a chart reads the way its source did.
+    return names[names.length - 1] + ' by ' + names[0];
   }
 
   /** The report's pages, in the order the report lays them out. */
@@ -923,6 +927,15 @@
 
     const datasets = [];
     const skipped = [];
+    // Titles are not unique. A page can hold several untitled visuals that
+    // describe themselves the same way, and two tiles with one name is confusing
+    // to read even once they no longer collide underneath.
+    const usedTitles = new Map();
+    const distinct = (title) => {
+      const seenBefore = usedTitles.get(title) || 0;
+      usedTitles.set(title, seenBefore + 1);
+      return seenBefore ? title + ' (' + (seenBefore + 1) + ')' : title;
+    };
     for (let i = 0; i < wanted.length; i += 1) {
       const v = wanted[i];
       const label = v.title || v.visualType || 'visual ' + (i + 1);
@@ -930,7 +943,7 @@
 
       const asNote = () => {
         if (v.text.length < TEXT_TILE_MIN_CHARS) return false;
-        datasets.push({ page: v.page, title: v.title || 'Note', text: v.text });
+        datasets.push({ page: v.page, title: distinct(v.title || 'Note'), text: v.text });
         return true;
       };
 
@@ -955,7 +968,7 @@
       }
       datasets.push({
         page: v.page,
-        title: v.title || nameFromColumns(result.columns, label),
+        title: distinct(v.title || nameFromColumns(result.columns, v.visualType, label)),
         // Lets the liveboard draw each tile the way the source visual is drawn.
         visualType: v.visualType || undefined,
         // Visuals that share a type can still draw differently — a scatter with
