@@ -193,7 +193,7 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
     let dataInput: { columns: { name: string; type?: string; dataType?: string }[]; rows: unknown[][] } | null = null;
     // One entry per source visual: the liveboard gets a tile per visual, each
     // answering from a worksheet loaded with that visual's own rows.
-    let datasetsInput: { title: string; visualType?: string; columns: { name: string }[]; rows: unknown[][] }[] = [];
+    let datasetsInput: { title: string; visualType?: string; roles?: string[]; columns: { name: string }[]; rows: unknown[][] }[] = [];
     if (ct.includes('multipart/form-data')) {
       const form = await c.req.formData();
       platform = String(form.get('platform') ?? '');
@@ -217,11 +217,12 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
       const d = b.data as { columns?: { name: string; type?: string; dataType?: string }[]; rows?: unknown[][] } | undefined;
       if (d && Array.isArray(d.columns) && Array.isArray(d.rows)) dataInput = { columns: d.columns, rows: d.rows };
       if (Array.isArray(b.datasets)) {
-        datasetsInput = (b.datasets as { title?: string; name?: string; visualType?: string; columns?: { name: string }[]; rows?: unknown[][] }[])
+        datasetsInput = (b.datasets as { title?: string; name?: string; visualType?: string; roles?: string[]; columns?: { name: string }[]; rows?: unknown[][] }[])
           .filter((d2) => d2 && Array.isArray(d2.columns) && d2.columns.length && Array.isArray(d2.rows) && d2.rows.length)
           .map((d2, i) => ({
             title: String(d2.title ?? d2.name ?? `Source ${i + 1}`),
             visualType: d2.visualType ? String(d2.visualType) : undefined,
+            roles: Array.isArray(d2.roles) ? d2.roles.map(String) : undefined,
             columns: d2.columns!,
             rows: d2.rows!,
           }));
@@ -295,11 +296,18 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
         // Names are capped at 80 characters, so two visuals whose titles share a
         // prefix — "Revenue won" and "Revenue Won and Revenue In Pipeline…" —
         // can truncate to near-identical worksheet names, and a tile then fails
-        // to resolve its source. A short suffix off the full title keeps every
-        // worksheet distinct.
-        const suffix = Array.from(ds.title).reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7)
+        // to resolve its source. A short suffix keeps every worksheet distinct.
+        // It hashes the liveboard name as well as the title, so two report pages
+        // that both hold a "Revenue and forecast by Product" get their own.
+        const suffix = Array.from(`${name}·${ds.title}`)
+          .reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7)
           .toString(36).slice(0, 4);
-        const wsName = `${`${name} · ${ds.title}`.slice(0, 74)} ${suffix}`;
+        // Budget the title first. The prefix carries the report and page ids and
+        // can fill all 80 characters by itself, which truncated every title away
+        // and left worksheets telling apart only by their hash.
+        const shortTitle = ds.title.slice(0, 40);
+        const prefix = name.slice(0, Math.max(8, 74 - shortTitle.length - 3));
+        const wsName = `${prefix} · ${shortTitle} ${suffix}`;
         let ws;
         try {
           ws = await loadDataset(tsEnv, wsName, ds.columns, ds.rows);
@@ -329,6 +337,7 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
         sources.push({
           title: ds.title,
           visualType: ds.visualType,
+          roles: ds.roles,
           worksheetName: ws.worksheetName,
           columns: ds.columns.map((col, ci) => ({
             id: `col_${ci}`,
