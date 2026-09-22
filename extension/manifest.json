@@ -27,7 +27,9 @@
       ],
       "matches": [
         "https://prod-in-a.online.tableau.com/*",
-        "https://app.powerbi.com/*"
+        "https://app.powerbi.com/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
       ]
     }
   ],
@@ -89,6 +91,7 @@
         "https://localhost/*"
       ],
       "js": [
+        "dist/embed-liveboard.js",
         "platforms/embed/content.js"
       ],
       "css": [

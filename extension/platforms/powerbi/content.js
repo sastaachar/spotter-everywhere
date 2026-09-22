@@ -1215,6 +1215,35 @@
     });
     return { page, matched: matched.size, canvas: canvasVisuals().length, layout: onPage.length };
   }
+  // A host page that wants this report as a ThoughtSpot Liveboard loads the
+  // report in a hidden frame and asks here, because the data has to be read
+  // from Power BI with the signed-in session and that only exists in this
+  // frame. The answer is a liveboard id the host can embed; the frame is then
+  // thrown away, so the report itself is never shown.
+  const BUILD_REQUEST = 'spotter:build-liveboard';
+  const BUILD_RESULT = 'spotter:liveboard-built';
+
+  addEventListener('message', async (ev) => {
+    if (!ev.data || ev.data.type !== BUILD_REQUEST) return;
+    const reply = (payload) => {
+      try { (ev.source || parent).postMessage({ type: BUILD_RESULT, ...payload }, '*'); } catch (e) { /* gone */ }
+    };
+    try {
+      // Wait for the layout: a frame that has only just loaded has no visuals
+      // to read yet, and the host cannot know when that changes.
+      for (let i = 0; i < 90 && !layoutVisuals.length; i += 1) {
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      const context = reportContext();
+      const liveboardId = await buildLiveboard(context, (key, state, detail) => {
+        reply({ progress: { key, state, detail } });
+      });
+      reply({ liveboardId, userid: datasetUserId(context), pageTitle: context.pageTitle });
+    } catch (err) {
+      reply({ error: String((err && err.message) || err) });
+    }
+  });
+
   window.__spotterProbe = probe;
 
   let scanTimer = null;
