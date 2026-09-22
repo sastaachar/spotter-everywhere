@@ -13,6 +13,10 @@ import { checkServerIdentity } from 'node:tls';
 import { Agent, setGlobalDispatcher } from 'undici';
 import { serve } from '@hono/node-server';
 import { createApp } from './app';
+import { initFileLog } from './log';
+
+// Persist all backend output to a file (override the path with LOG_FILE).
+initFileLog(process.env.LOG_FILE ?? './logs/spotter.log');
 
 const apiKey = process.env.SPOTTER_API_KEY;
 if (!apiKey) {

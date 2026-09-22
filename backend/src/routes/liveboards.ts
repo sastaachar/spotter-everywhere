@@ -1,16 +1,12 @@
 import type { Hono } from 'hono';
+import { stream } from 'hono/streaming';
 import { bodyLimit } from 'hono/body-limit';
-import { extractTwbXml, parseTableauColumns, type Column } from '../tableau';
+import { extractTwbXml, parseTableauColumns, parseWorkbookStructure, type Column, type WorkbookStructure } from '../tableau';
 import { parseTmdlColumns } from '../powerbi';
 import { generateTml, generateLiveboardTml, generateLiveboardOverSources } from '../tml';
 import type { LiveboardSource } from '../tml';
 import { importTml, findGuid, importErrors, findMetadataId, shareMetadata } from '../thoughtspot';
 import type { Deps } from '../deps';
-
-// Deterministic liveboard name from (platform, guid) alone, so /get-liveboard
-// and /create-liveboard agree on the reuse key without sharing any other state.
-const liveboardKey = (platform: string, guid: string): string =>
-  `Spotter · ${platform} · ${guid}`.slice(0, 80);
 
 // Each source platform declares its modeling language and how to read columns.
 const CONVERTERS: Record<string, { modeling: string; binary: boolean; parse: (data: Uint8Array | string) => Column[] }> = {
@@ -148,20 +144,25 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
   app.post('/get-liveboard', async (c) => {
     let platform = '';
     let guid = '';
+    let providedName = '';
     if ((c.req.header('content-type') ?? '').includes('application/json')) {
       const b = (await c.req.json().catch(() => ({}))) as Record<string, string>;
       platform = b.platform ?? '';
       guid = b.guid ?? '';
+      providedName = b.name ?? '';
     }
     platform = (platform || c.req.query('platform') || '').toLowerCase();
     guid = guid || c.req.query('guid') || '';
-    if (!platform || !guid) {
-      return c.json({ error: 'invalid_request', detail: 'platform and guid are required' }, 400);
+    providedName = providedName || c.req.query('name') || '';
+    if (!platform || (!guid && !providedName)) {
+      return c.json({ error: 'invalid_request', detail: 'platform and a name or guid are required' }, 400);
     }
     if (!canAdmin()) {
       return c.json({ error: 'not_configured', detail: 'TS_HOST and TS_TOKEN must be set to look up liveboards' }, 503);
     }
-    const name = liveboardKey(platform, guid);
+    // An explicit name (the workbook/view name) is the reuse key when given, so
+    // it matches how /create-liveboard names the board; else the guid key.
+    const name = (providedName || liveboardKey(platform, guid)).slice(0, 80);
     let id;
     try {
       id = await findMetadataId((await adminEnv())!, name, 'LIVEBOARD');
@@ -175,10 +176,11 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
     }, 200);
   });
 
-  // Build (or reuse) a liveboard from a platform's model, reporting each stage:
-  // lookup -> parse -> generate -> import -> locate. Body: multipart { platform,
-  // name, file } or JSON { platform, name, fileBase64 | model }. `name` is the
-  // reuse key. Returns { reused, liveboardId, stages: [{stage,status,detail}] }.
+  // Build (or reuse) a liveboard from a platform's model + data, streaming each
+  // stage (lookup -> load-data -> generate -> import -> share) as NDJSON when the
+  // client asks (?stream=1 or ndjson Accept), matching /dataset, so the extension
+  // checklist fills in live; otherwise a single JSON result. `name`/`guid` is the
+  // reuse key. A posted Tableau workbook makes the liveboard mirror its tabs.
   app.post('/create-liveboard', bodyLimit({ maxSize: maxBody }), async (c) => {
     const ct = c.req.header('content-type') ?? '';
     let platform = '';
@@ -226,9 +228,9 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
     }
 
     platform = platform.toLowerCase();
-    // When a guid is given, key on it (matches /get-liveboard); else fall back
-    // to an explicit name or the filename.
-    name = guid ? liveboardKey(platform, guid) : (name || filename.replace(/\.(twbx?|tdsx?|tmdl|zip)$/i, '') || '').slice(0, 80);
+    // An explicit name (the workbook/view name) wins, so the liveboard heading is
+    // readable; else key on the guid (matches /get-liveboard), else the filename.
+    name = (name || (guid ? liveboardKey(platform, guid) : filename.replace(/\.(twbx?|tdsx?|tmdl|zip)$/i, '')) || '').slice(0, 80);
     const conv = CONVERTERS[platform];
     if (!conv) {
       return c.json({ error: 'unsupported_platform', detail: `platform must be one of: ${Object.keys(CONVERTERS).join(', ')}` }, 400);
@@ -346,30 +348,24 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
     let rows: unknown[][] | null = null;
     if (dataInput) {
       columns = dataInput.columns
-        .filter((c) => c && c.name)
-        .map((c, i) => ({
-          id: c.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || `col_${i}`,
-          name: c.name,
-          type: c.type === 'MEASURE' ? 'MEASURE' : 'ATTRIBUTE',
-          dataType: (c.dataType as Column['dataType']) || 'VARCHAR',
+        .filter((col) => col && col.name)
+        .map((col, i) => ({
+          id: col.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || `col_${i}`,
+          name: col.name,
+          type: col.type === 'MEASURE' ? 'MEASURE' : 'ATTRIBUTE',
+          dataType: (col.dataType as Column['dataType']) || 'VARCHAR',
         }));
       rows = dataInput.rows;
-      if (!columns.length) {
-        stage('parse', 'failed', 'data.columns was empty');
-        return c.json({ platform, name, reused: false, stages }, 422);
-      }
-      stage('parse', 'ok', `${columns.length} columns, ${rows.length} rows (from data)`);
+      if (!columns.length) return c.json({ error: 'invalid_request', detail: 'data.columns was empty' }, 422);
     } else {
       const model: Uint8Array | string | null = conv.binary ? bytes : text || (bytes ? new TextDecoder().decode(bytes) : '');
       if (!model || (conv.binary ? (model as Uint8Array).length === 0 : String(model).length === 0)) {
-        stage('parse', 'failed', `no ${conv.modeling} model or data provided for ${platform}`);
-        return c.json({ platform, name, reused: false, stages }, 400);
+        return c.json({ error: 'invalid_request', detail: `no ${conv.modeling} model or data provided for ${platform}` }, 400);
       }
       try {
         columns = conv.parse(model);
       } catch (e) {
-        stage('parse', 'failed', (e as Error).message);
-        return c.json({ platform, name, reused: false, stages }, 422);
+        return c.json({ error: 'parse_failed', detail: (e as Error).message }, 422);
       }
       if (!columns.length) {
         stage('parse', 'failed', 'no fields found in the model');
@@ -387,69 +383,46 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
         ws = await loadDataset(tsEnv, name + ' Data', columns, rows);
         stage('load-data', ws.loaded ? 'ok' : 'failed', ws.worksheetId ? `worksheet ${ws.worksheetId}` : (ws.messages || []).join('; '));
       } catch (e) {
-        stage('load-data', 'failed', (e as Error).message);
-        return c.json({ platform, name, reused: false, error: 'data_load_failed', detail: (e as Error).message, stages }, 502);
+        console.error('[create-liveboard] structure parse failed:', (e as Error).message);
       }
-      if (!ws.worksheetId) {
-        return c.json({ platform, name, reused: false, error: 'data_load_failed', detail: 'no worksheet after load', stages }, 502);
-      }
-      const liveboardTml = generateLiveboardTml(name, ws.worksheetName, columns);
-      stage('generate', 'ok');
-      try {
-        const result = await importTml(tsEnv, [liveboardTml]);
-        liveboardId = findGuid(result, name);
-        if (!liveboardId) {
-          const detail = importErrors(result).join(' | ') || 'no liveboard GUID in the import response';
-          console.error('[create-liveboard] liveboard import produced no GUID:', detail);
-          stage('import', 'failed', detail);
-          return c.json({ platform, name, reused: false, error: 'import_failed', detail, stages }, 502);
-        }
-        stage('import', 'ok');
-        stage('locate', 'ok');
-      } catch (e) {
-        stage('import', 'failed', (e as Error).message);
-        return c.json({ platform, name, reused: false, error: 'cluster_error', detail: (e as Error).message, stages }, 502);
-      }
-      return c.json({ platform, name, reused: false, worksheetId: ws.worksheetId, liveboardId, liveboardUrl: pinboardUrl(liveboardId), stages }, 201);
     }
 
-    // 3. generate — schema-only TML (no data).
-    const base = generateTml(name, columns);
-    const liveboardTml = generateLiveboardTml(name, base.worksheetName, columns);
-    const tml = { ...base, liveboardTml };
-    stage('generate', 'ok');
+    const hostBase = options.tsHost!.replace(/\/$/, '');
+    const groups = options.tsUserGroups ?? [];
+    const params = { platform, name, columns, rows, structure };
 
-    // 4/5. import + locate.
-    if (tsEnv) {
-      try {
-        const result = await importTml(tsEnv, [tml.tableTml, tml.worksheetTml, liveboardTml]);
-        const errors = importErrors(result);
-        liveboardId = findGuid(result, name);
-        if (liveboardId) {
-          stage('import', 'ok');
-          stage('locate', 'ok');
-        } else {
-          // ALL_OR_NONE: any TML that fails validation aborts the whole import.
-          const detail = errors.length ? errors.join(' | ') : 'no GUID and no error in the import response';
-          console.error('[create-liveboard] import produced no liveboard:', detail);
-          stage('import', 'failed', detail);
-          stage('locate', 'failed');
-          return c.json({ platform, name, reused: false, error: 'import_failed', detail, columns, tml, stages }, 502);
+    const wantsStream = c.req.query('stream') === '1'
+      || (c.req.header('accept') ?? '').includes('application/x-ndjson');
+    if (wantsStream) {
+      c.header('Content-Type', 'application/x-ndjson; charset=utf-8');
+      c.header('Cache-Control', 'no-store');
+      c.header('X-Accel-Buffering', 'no'); // don't let a proxy buffer the stream
+      return stream(c, async (s) => {
+        // Serialize every write so heartbeats and stage events can't interleave
+        // and corrupt an NDJSON line.
+        let chain: Promise<unknown> = Promise.resolve();
+        const write = (obj: Record<string, unknown>): Promise<unknown> => {
+          chain = chain.then(() => s.write(JSON.stringify(obj) + '\n')).catch(() => {});
+          return chain;
+        };
+        // The Falcon load stage can be silent for ~20s; without traffic the stream
+        // goes idle and the MV3 worker / connection is torn down ("network error").
+        // A heartbeat every few seconds keeps it alive.
+        const heartbeat = setInterval(() => { void write({ stage: 'heartbeat', status: 'active' }); }, 5000);
+        try {
+          const result = await buildLiveboard(tsEnv, hostBase, groups, loadDataset, params, async (e) => { await write(e); });
+          await write({ stage: 'result', status: result.status, ...result.body });
+        } catch (e) {
+          console.error(`[create-liveboard] stream failed for "${name}":`, (e as Error).stack || (e as Error).message);
+          await write({ stage: 'result', status: 500, error: 'internal_error', detail: (e as Error).message });
+        } finally {
+          clearInterval(heartbeat);
+          await chain;
         }
-      } catch (e) {
-        stage('import', 'failed', (e as Error).message);
-        return c.json({ platform, name, reused: false, error: 'cluster_error', detail: (e as Error).message, columns, tml, stages }, 502);
-      }
-    } else {
-      stage('import', 'skipped', 'no cluster configured');
-      stage('locate', 'skipped');
+      });
     }
 
-    return c.json({
-      platform, name, reused: false, columns, tml,
-      liveboardId,
-      liveboardUrl: liveboardId ? pinboardUrl(liveboardId) : undefined,
-      stages,
-    }, liveboardId ? 201 : 200);
+    const result = await buildLiveboard(tsEnv, hostBase, groups, loadDataset, params, () => {});
+    return c.json(result.body, result.status);
   });
 }

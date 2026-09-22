@@ -1,6 +1,10 @@
 import { createApp } from './app';
+import { initFileLog } from './log';
 
 const DEFAULT_PORT = 8799;
+
+// Persist all backend output to a file (override the path with LOG_FILE).
+initFileLog(Bun.env.LOG_FILE ?? './logs/spotter.log');
 
 const apiKey = Bun.env.SPOTTER_API_KEY;
 if (!apiKey) {

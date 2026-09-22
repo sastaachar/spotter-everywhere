@@ -1,7 +1,7 @@
 // Generate ThoughtSpot TML (a table + a worksheet on top) from a column schema.
 // NOTE: TML shape varies by cluster version — validate against the target
 // cluster's tml/export output before relying on import.
-import type { Column } from './tableau';
+import type { Column, WorkbookStructure } from './tableau';
 
 export interface GeneratedTml {
   tableName: string;
@@ -92,12 +92,13 @@ export function generateLiveboardTml(name: string, worksheetName: string, column
       '    answer:',
       `      name: "${q(title)}"`,
       '      tables:',
-      `      - name: "${q(worksheetName)}"`,
+      `      - id: "${q(worksheetName)}"`,
+      `        name: "${q(worksheetName)}"`,
       `      search_query: "${q(query)}"`,
       ...answerCols(colNames),
     ];
     if (chart) {
-      block.push('      chart:', `        type: ${chart}`);
+      block.push('      display_mode: CHART_MODE', '      chart:', `        type: ${chart}`);
     } else {
       block.push('      display_mode: TABLE_MODE');
     }
@@ -349,4 +350,122 @@ export function generateWorksheetOnTable(
     wsCols,
     '',
   ].join('\n');
+}
+
+// ── Tabbed liveboard that mirrors the workbook's dashboards ──────────────────
+// One Liveboard tab per dashboard, one visualization per worksheet, built on the
+// single loaded worksheet model. Fields are resolved against that model's
+// columns; a worksheet whose fields aren't in the model (calc/param-only) is
+// skipped, and an otherwise-empty tab gets a summary table so it isn't blank.
+// Chart types are limited to the set the cluster validated: COLUMN, BAR, LINE,
+// AREA, SCATTER, PIE, and TABLE_MODE (KPI is rejected on import).
+
+function chartFor(mark: string, dims: string[], measures: string[]): string {
+  const m = (mark || '').toLowerCase();
+  // A scatter is two measures against each other; keep it even with no dimension.
+  if (m === 'circle' && measures.length >= 2) return 'SCATTER';
+  if (measures.length && dims.length === 0) return 'TABLE_MODE';
+  if (m === 'line') return 'LINE';
+  if (m === 'area') return 'AREA';
+  if (m === 'circle') return 'COLUMN';
+  if (m === 'pie') return 'PIE';
+  if (m === 'square' || m === 'map' || m.includes('polygon')) return 'TABLE_MODE';
+  if (m === 'bar') return 'COLUMN';
+  if (dims.length && measures.length) return 'COLUMN';
+  return 'TABLE_MODE';
+}
+
+const MAX_TAB_VIZ = 12;
+const MAX_FILTERS = 8;
+
+export function generateTabbedLiveboardTml(
+  name: string,
+  worksheetName: string,
+  structure: WorkbookStructure,
+  columns: Column[],
+): string {
+  const byName = new Map(columns.map((c) => [c.name.toLowerCase(), c]));
+  interface V { id: string; title: string; query: string; cols: string[]; chart: string }
+  const vizzes: V[] = [];
+  const tabs: { name: string; ids: string[] }[] = [];
+  const filterFields: string[] = []; // dimensions the workbook filters on, in first-seen order
+  let n = 0;
+
+  const addViz = (title: string, cols: string[], chart: string): string => {
+    const id = `Viz_${++n}`;
+    vizzes.push({ id, title, query: cols.map((c) => `[${c}]`).join(' '), cols, chart });
+    return id;
+  };
+
+  for (const dash of structure.dashboards) {
+    const ids: string[] = [];
+    for (const wsName of dash.worksheets.slice(0, MAX_TAB_VIZ)) {
+      const ws = structure.worksheets[wsName];
+      if (!ws) continue;
+      const dims: string[] = [];
+      const measures: string[] = [];
+      for (const f of ws.fields) {
+        const col = byName.get(f.toLowerCase());
+        if (!col) continue;
+        const bucket = col.type === 'MEASURE' ? measures : dims;
+        if (!bucket.includes(col.name)) bucket.push(col.name);
+      }
+      const cols = [...dims, ...measures];
+      if (!cols.length) continue; // nothing in this viz maps to the model
+      ids.push(addViz(wsName, cols, chartFor(ws.mark, dims, measures)));
+      // Carry over the worksheet's categorical filters (dimensions in the model).
+      for (const f of ws.filters) {
+        const col = byName.get(f.toLowerCase());
+        if (col && col.type === 'ATTRIBUTE' && !filterFields.includes(col.name)) filterFields.push(col.name);
+      }
+    }
+    // Skip a tab whose worksheets don't map to the loaded model — a fabricated
+    // "— data" table just clutters the board and reads as "everything is a table".
+    if (ids.length) tabs.push({ name: dash.name, ids });
+  }
+
+  // Nothing from the workbook resolved against this view's data — fall back to a
+  // real single-tab board (a table plus a column chart per measure) rather than
+  // an empty tabbed shell.
+  if (!vizzes.length) return generateLiveboardTml(name, worksheetName, columns);
+
+  const lines: string[] = ['liveboard:', `  name: "${q(name)}"`, '  visualizations:'];
+  for (const v of vizzes) {
+    lines.push(
+      `  - id: ${v.id}`,
+      '    answer:',
+      `      name: "${q(v.title)}"`,
+      '      tables:',
+      `      - id: "${q(worksheetName)}"`, // id so liveboard filters can reference <table>::<col>
+      `        name: "${q(worksheetName)}"`,
+      `      search_query: "${q(v.query)}"`,
+      '      answer_columns:',
+      ...v.cols.map((c) => `      - name: "${q(c)}"`),
+    );
+    // A chart needs display_mode: CHART_MODE too — with only a chart type the
+    // answer defaults to TABLE_MODE and renders as a table.
+    if (v.chart === 'TABLE_MODE') lines.push('      display_mode: TABLE_MODE');
+    else lines.push('      display_mode: CHART_MODE', '      chart:', `        type: ${v.chart}`);
+  }
+  lines.push('  tabs:');
+  for (const t of tabs) {
+    lines.push(`  - name: "${q(t.name)}"`, '    visualizations:', ...t.ids.map((id) => `    - ${id}`));
+  }
+  // The workbook's categorical filters, as liveboard filter chips (all values by
+  // default). The column is referenced as <table-id>::<field>; the vizzes set
+  // that table id above, so it resolves on import.
+  if (filterFields.length) {
+    lines.push('  filters:');
+    for (const f of filterFields.slice(0, MAX_FILTERS)) {
+      lines.push(
+        '  - column:',
+        `    - "${q(worksheetName)}::${q(f)}"`,
+        '    is_mandatory: false',
+        '    is_single_value: false',
+        "    display_name: ''",
+      );
+    }
+  }
+  lines.push('');
+  return lines.join('\n');
 }

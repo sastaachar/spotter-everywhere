@@ -102,7 +102,7 @@ export function makeDeps(options: AppOptions): Deps {
     const ids = [worksheetId, tableId].filter((x): x is string => Boolean(x));
     if (ids.length && groups.length) {
       try {
-        await shareMetadata(env, ids, groups.map((g) => ({ identifier: g, type: 'USER_GROUP' as const })), 'READ_ONLY');
+        await shareMetadata(env, ids, groups.map((g) => ({ identifier: g, type: 'USER_GROUP' as const })), 'MODIFY');
       } catch (e) {
         console.error('[loadDataset] share failed:', (e as Error).message);
       }

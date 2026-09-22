@@ -70,7 +70,7 @@ export async function buildDataset(
   if (ids.length && groups.length) {
     await emit({ stage: 'share', status: 'start' });
     try {
-      await shareMetadata(tsEnv, ids, groups.map((g) => ({ identifier: g, type: 'USER_GROUP' as const })), 'READ_ONLY');
+      await shareMetadata(tsEnv, ids, groups.map((g) => ({ identifier: g, type: 'USER_GROUP' as const })), 'MODIFY');
       await emit({ stage: 'share', status: 'done' });
     } catch (e) {
       shareError = (e as Error).message;

@@ -232,12 +232,20 @@ export function exportTml(env: TsEnv, guids: string[]): Promise<unknown> {
 }
 
 /** Import table + worksheet TML; returns the raw import response (carries GUIDs). */
-export function importTml(env: TsEnv, tmls: string[]): Promise<unknown> {
-  return ts(env, '/api/rest/2.0/metadata/tml/import', {
+export async function importTml(env: TsEnv, tmls: string[]): Promise<unknown> {
+  const result = await ts(env, '/api/rest/2.0/metadata/tml/import', {
     metadata_tmls: tmls,
     import_policy: 'ALL_OR_NONE',
     create_new: true,
   });
+  // tml/import returns HTTP 200 even when validation fails — the reason lives in
+  // the per-object status — so log the raw response every time; it is the only
+  // place a "why is my TML invalid" answer actually appears.
+  const raw = (() => { try { return JSON.stringify(result); } catch { return String(result); } })();
+  console.log(`[tml/import] ${tmls.length} tml → ${raw.slice(0, 6000)}`);
+  const errs = importErrors(result);
+  if (errs.length) console.error('[tml/import] validation errors:', errs.join(' | '));
+  return result;
 }
 
 /** Resolve a metadata object's GUID by name via v2 search (reliable, unlike
@@ -272,12 +280,24 @@ export function searchData(env: TsEnv, worksheetId: string, query: string, recor
 // varies by version), so an ALL_OR_NONE failure reports WHY nothing imported.
 export function importErrors(result: unknown): string[] {
   const out: string[] = [];
+  const push = (s: unknown): void => {
+    if (typeof s === 'string' && s.trim() && !out.includes(s)) out.push(s);
+  };
+  // Message fields vary by version and casing; collect any of them, anywhere.
+  const MSG_KEYS = [
+    'error_message', 'errorMessage', 'error_msg', 'error', 'message',
+    'status_message', 'statusMessage', 'description', 'reason', 'detail',
+  ];
   const walk = (v: unknown): void => {
     if (!v || typeof v !== 'object') return;
     const o = v as Record<string, unknown>;
-    for (const key of ['error_message', 'error', 'message']) {
-      const val = o[key];
-      if (typeof val === 'string' && val && !out.includes(val)) out.push(val);
+    for (const key of MSG_KEYS) push(o[key]);
+    // A status object may carry only an enum (ERROR/FAILED/INVALID); surface the
+    // code with any nearby text so a bare failure is not silent.
+    const code = o.status_code ?? o.statusCode ?? o.status ?? o.level ?? o.type;
+    if (typeof code === 'string' && /^(ERROR|FAILED|FAILURE|INVALID)$/i.test(code)) {
+      const near = MSG_KEYS.map((k) => o[k]).find((x) => typeof x === 'string' && x);
+      push(near ? `${code}: ${near}` : `status ${code}`);
     }
     Object.values(o).forEach(walk);
   };

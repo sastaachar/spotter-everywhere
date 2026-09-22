@@ -27,6 +27,7 @@
   const CACHE_GET = 'spotter:cache-get';
   const CACHE_SET = 'spotter:cache-set';
   const DATASET_STREAM = 'spotter:dataset-stream';
+  const LIVEBOARD_STREAM = 'spotter:liveboard-stream';
   const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
   const PLATFORM = 'tableau';
   const LB_BUTTON_CLASS = 'ts-lb-btn';
@@ -183,52 +184,96 @@
   async function openLiveboard(context) {
     closePanel();
     const loading = el('aside', FRAME_CLASS + ' ts-spotter-loading');
-    loading.textContent = 'Preparing the liveboard…';
     document.body.appendChild(loading);
     if (!extensionAlive()) { loading.textContent = RELOAD_MSG; return; }
-
+    const setStep = buildChecklist(loading, LIVEBOARD_STEP_DEFS, 'Building Liveboard');
+    const showRetry = decorateModal(loading, () => openLiveboard(context));
     const fail = (msg) => {
-      loading.textContent = msg;
+      const note = el('div', 'ts-spotter-steps-error', msg);
+      loading.querySelector('.ts-spotter-steps')?.appendChild(note);
+      showRetry();
     };
+
+    // Mount the liveboard in the Tableau page (same in-page panel as Spotter),
+    // NOT panel.html: from a chrome-extension:// origin the SDK's hostAppUrl is
+    // the bare extension id and the cluster 401s every embed call.
+    const openPanel = (liveboardId, wbName) => {
+      const panel = window.__spotterPanel;
+      if (!panel) { fail('Liveboard could not load — rebuild the extension (`npm run build`).'); return false; }
+      loading.remove();
+      panel.open({ ...context, platform: PLATFORM, liveboardId, workbook: wbName }, FRAME_CLASS);
+      return true;
+    };
+
     try {
+      setStep('resolve', 'active');
       const wb = await resolveWorkbook(context);
       const guid = wb.luid;
-      if (!guid) return fail('Could not resolve the workbook id for this view.');
+      if (!guid) { setStep('resolve', 'error'); return fail('Could not resolve the workbook id for this view.'); }
+      setStep('resolve', 'done', wb.name || '');
 
-      // Build once: look it up by (platform, guid) first — no download.
-      let liveboardId;
-      const found = await workerCall(GET_LIVEBOARD, { platform: PLATFORM, guid });
-      if (found.error && !/reach the backend/i.test(found.error)) return fail(found.error);
-      if (found.error) return fail(found.error);
+      // Read the active dashboard + its worksheets first. The active tab name
+      // scopes the liveboard to THIS tab, so each Tableau dashboard opens its own
+      // board (heading "Superstore · Performance") instead of one shared board.
+      setStep('check', 'active');
+      const list = await requestWorksheetData(null, 'worksheets');
+      const dashboard = (list && list.dashboard) || context.dashboard || '';
+      const lbName = ([wb.name, dashboard].filter(Boolean).join(' · ')).slice(0, 80) || guid;
+
+      // Build once: look it up by name first — no download, no build.
+      const found = await workerCall(GET_LIVEBOARD, { platform: PLATFORM, name: lbName });
+      if (found.error && !/reach the backend/i.test(found.error)) { setStep('check', 'error'); return fail(found.error); }
       if (found.body && found.body.exists) {
-        liveboardId = found.body.liveboardId;
-      } else {
-        // Build from real data: pull the dashboard's first worksheet's rows and
-        // send them, so the liveboard is populated (not an empty schema).
-        loading.textContent = 'Reading the dashboard data…';
-        const list = await requestWorksheetData(null, 'worksheets');
-        const first = list && list.worksheets && list.worksheets[0];
-        if (!first) return fail('No worksheets found in this view to build a liveboard from.');
-        loading.textContent = 'Loading “' + first.name + '” into ThoughtSpot…';
-        const data = await requestWorksheetData(first.name, 'underlying');
-        const columns = data.columns.map((col) => ({
-          name: col.name,
-          type: /int|float|real|number|decimal|double/i.test(col.type || '') ? 'MEASURE' : 'ATTRIBUTE',
-          dataType: col.type,
-        }));
-        const res = await workerCall(CREATE_LIVEBOARD, { platform: PLATFORM, guid, data: { columns, rows: data.rows } });
+        setStep('check', 'done', 'already built');
+        ['data', 'lookup', 'load-data', 'generate', 'import', 'share'].forEach((k) => setStep(k, 'skip', 'reused'));
+        setStep('open', 'active');
+        if (openPanel(found.body.liveboardId, lbName)) setStep('open', 'done');
+        return;
+      }
+      setStep('check', 'done', dashboard ? ('tab: ' + dashboard) : 'needs build');
+
+      // Read the first worksheet's rows so the liveboard sits on real data.
+      setStep('data', 'active');
+      const first = list && list.worksheets && list.worksheets[0];
+      if (!first) { setStep('data', 'error'); return fail('No worksheets found in this view to build a liveboard from.'); }
+      const data = await requestWorksheetData(first.name, 'underlying');
+      const columns = data.columns.map((col) => ({
+        name: col.name,
+        type: /int|float|real|number|decimal|double/i.test(col.type || '') ? 'MEASURE' : 'ATTRIBUTE',
+        dataType: col.type,
+      }));
+      setStep('data', 'done', data.rows.length.toLocaleString() + ' rows');
+
+      // Also send the workbook so the backend can mirror its dashboards as tabs.
+      let fileBase64 = null;
+      try { if (wb.downloadUrl) fileBase64 = await fetchWorkbookBase64(wb.downloadUrl); } catch (e) { /* tabs optional */ }
+
+      const payload = { platform: PLATFORM, name: lbName, guid, data: { columns, rows: data.rows }, fileBase64, filename: (wb.name || 'workbook') + '.twbx' };
+      let liveboardId;
+      let gotEvent = false;
+      try {
+        // Stream each backend stage (lookup -> load-data -> generate -> import ->
+        // share) into the checklist as it happens.
+        const result = await createLiveboardStream(payload, (ev) => {
+          gotEvent = true;
+          const st = ev.status === 'done' ? 'done' : ev.status === 'error' ? 'error' : 'active';
+          setStep(ev.stage, st, ev.detail || '');
+        });
+        liveboardId = result && result.liveboardId;
+      } catch (streamErr) {
+        // If the stream actually ran and the build failed, surface that — don't
+        // fire a second build (a duplicate Falcon load collides with the first).
+        // Only fall back when the stream itself couldn't start.
+        if (gotEvent) return fail((streamErr && streamErr.message) || 'Liveboard build failed.');
+        console.warn('[Tableau Liveboard] stream could not start, falling back:', streamErr && streamErr.message);
+        const res = await workerCall(CREATE_LIVEBOARD, payload);
         if (res.error) return fail(res.error);
         liveboardId = res.body && res.body.liveboardId;
       }
       if (!liveboardId) return fail('The liveboard was not created.');
 
-      loading.remove();
-      const frame = document.createElement('iframe');
-      frame.className = FRAME_CLASS;
-      frame.title = 'Liveboard';
-      frame.src = chrome.runtime.getURL('panel.html') + '#'
-        + encodeURIComponent(JSON.stringify({ ...context, platform: PLATFORM, liveboardId, workbook: wb.name }));
-      document.body.appendChild(frame);
+      setStep('open', 'active');
+      if (openPanel(liveboardId, wb.name)) setStep('open', 'done');
     } catch (e) {
       fail((e && e.message) || String(e));
     }
@@ -272,18 +317,37 @@
     else pending.resolve(ev.data.result);
   });
 
+  // Every same-origin frame reachable from the highest same-origin ancestor.
+  // The Tableau viz (and its bridge) can be in a sibling or deeper iframe in
+  // embedded mode, so we can't assume it's self/parent/top.
+  function reachableFrames() {
+    const set = new Set();
+    const sameOrigin = (w) => { try { void w.location.href; return true; } catch (e) { return false; } };
+    const addTree = (w) => {
+      if (!w || set.has(w) || !sameOrigin(w)) return;
+      set.add(w);
+      for (let i = 0; i < w.frames.length; i++) { try { addTree(w.frames[i]); } catch (e) { /* cross-origin */ } }
+    };
+    let root = window;
+    try { while (root.parent && root.parent !== root && sameOrigin(root.parent)) root = root.parent; } catch (e) { /* stop climbing */ }
+    addTree(root);
+    addTree(window); // self + descendants, in case root climbing was blocked
+    return set;
+  }
+
   function requestWorksheetData(worksheet, kind) {
-    if (window.parent === window) {
-      return Promise.reject(new Error('Not inside the Tableau portal page; data bridge unavailable.'));
-    }
     const requestId = ++requestSeq;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         pendingRequests.delete(requestId);
-        reject(new Error('Timed out waiting for the data bridge.'));
+        reject(new Error('Timed out waiting for the data bridge. Reload the page (⌘R / F5), then Retry.'));
       }, REQUEST_TIMEOUT_MS);
       pendingRequests.set(requestId, { resolve, reject, timer });
-      window.parent.postMessage({ type: REQUEST_EVENT, requestId, worksheet, kind }, location.origin);
+      // Broadcast to every same-origin frame; only the one holding the viz replies.
+      const msg = { type: REQUEST_EVENT, requestId, worksheet, kind };
+      for (const t of reachableFrames()) {
+        try { t.postMessage(msg, location.origin); } catch (e) { /* skip */ }
+      }
     });
   }
 
@@ -292,6 +356,29 @@
     if (className) node.className = className;
     if (text != null) node.textContent = text;
     return node;
+  }
+
+  // Give any loading/checklist modal an always-present close (×). Returns a
+  // showRetry() that reveals a Retry button — call it only when a step fails, so
+  // Retry appears on failure rather than during a normal run. `onRetry` re-runs
+  // the flow; close tears the whole panel down.
+  function decorateModal(container, onRetry) {
+    const bar = el('div', 'ts-spotter-modal-controls');
+    const close = el('button', 'ts-spotter-modal-btn ts-spotter-modal-close', '×');
+    close.type = 'button';
+    close.title = 'Close';
+    close.setAttribute('aria-label', 'Close');
+    close.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); closePanel(); });
+    bar.appendChild(close);
+    container.appendChild(bar);
+    return function showRetry() {
+      if (bar.querySelector('.ts-spotter-modal-retry')) return;
+      const retry = el('button', 'ts-spotter-modal-btn ts-spotter-modal-retry', 'Retry');
+      retry.type = 'button';
+      retry.title = 'Retry';
+      retry.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); try { onRetry(); } catch (err) { console.error(err); } });
+      bar.insertBefore(retry, close);
+    };
   }
 
   function describeFilter(f) {
@@ -565,11 +652,11 @@
   // stage (load -> worksheet -> share) progresses, and the promise resolves with
   // the final result body ({ embed, dataset, ... }, same shape as createDataset).
   // Rejects on a transport failure or a pipeline error (status >= 400).
-  function createDatasetStream(payload, onEvent) {
+  function streamBuildPort(portName, payload, onEvent) {
     return new Promise((resolve, reject) => {
       let port;
       try {
-        port = chrome.runtime.connect({ name: DATASET_STREAM });
+        port = chrome.runtime.connect({ name: portName });
       } catch (e) {
         return reject(new Error('Extension worker unavailable — reload this page.'));
       }
@@ -602,6 +689,10 @@
       try { port.postMessage({ payload }); } catch (e) { finish(reject, new Error('could not start the stream')); }
     });
   }
+
+  // Streaming /dataset (Spotter) and /create-liveboard, each over its own Port.
+  const createDatasetStream = (payload, onEvent) => streamBuildPort(DATASET_STREAM, payload, onEvent);
+  const createLiveboardStream = (payload, onEvent) => streamBuildPort(LIVEBOARD_STREAM, payload, onEvent);
 
   // Ask the backend what already exists for this sheet (user / data model /
   // worksheet). Resolves null on any failure so the caller just builds instead.
@@ -673,12 +764,25 @@
     { key: 'worksheet', label: 'Preparing the worksheet' },
     { key: 'open', label: 'Opening Spotter' },
   ];
-  function buildChecklist(container) {
+  // Steps for the liveboard flow. lookup/load-data/generate/import/share match
+  // the backend's streamed stage names, so a stream event maps straight to a row.
+  const LIVEBOARD_STEP_DEFS = [
+    { key: 'resolve', label: 'Resolving the workbook' },
+    { key: 'check', label: 'Checking ThoughtSpot' },
+    { key: 'data', label: 'Reading dashboard data' },
+    { key: 'lookup', label: 'Looking up liveboard' },
+    { key: 'load-data', label: 'Loading data' },
+    { key: 'generate', label: 'Generating tabs' },
+    { key: 'import', label: 'Importing liveboard' },
+    { key: 'share', label: 'Sharing access' },
+    { key: 'open', label: 'Opening liveboard' },
+  ];
+  function buildChecklist(container, defs, title) {
     container.textContent = '';
     const wrap = el('div', 'ts-spotter-steps');
-    wrap.appendChild(el('div', 'ts-spotter-steps-title', 'Setting up Spotter'));
+    wrap.appendChild(el('div', 'ts-spotter-steps-title', title || 'Setting up Spotter'));
     const rows = {};
-    STEP_DEFS.forEach((s) => {
+    (defs || STEP_DEFS).forEach((s) => {
       const row = el('div', 'ts-spotter-step');
       row.dataset.state = 'pending';
       const icon = el('span', 'ts-spotter-step-icon');
@@ -718,6 +822,7 @@
     if (!extensionAlive()) { loading.textContent = RELOAD_MSG; return; }
     document.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: context }));
     const setStep = buildChecklist(loading);
+    const showRetry = decorateModal(loading, () => openSpotter(context, options));
 
     const openPanelFrame = (extra) => {
       // Mount Spotter in the Tableau page, NOT the extension's panel.html: the
@@ -727,7 +832,10 @@
       // dist/inpage-panel.js, loaded as a content script alongside this one.
       const panel = window.__spotterPanel;
       if (!panel) {
-        loading.textContent = 'Spotter could not load — rebuild the extension (`npm run build`).';
+        const note = el('div', 'ts-spotter-steps-error', 'Spotter could not load — rebuild the extension (`npm run build`).');
+        const steps = loading.querySelector('.ts-spotter-steps');
+        if (steps) steps.appendChild(note); else loading.appendChild(note);
+        showRetry();
         return;
       }
       loading.remove();

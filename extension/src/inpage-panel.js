@@ -14,6 +14,7 @@ import { tableauConfig, powerBiConfig } from '../../ui/spotter-embed/index.js';
 
 const EMBED_TOKEN = 'spotter:embed-token';
 const EMBEDS = { tableau: TableauSpotterEmbed, powerbi: PowerBiSpotterEmbed };
+const LIVEBOARDS = { tableau: TableauLiveboardEmbed, powerbi: PowerBiLiveboardEmbed };
 const CONFIGS = { tableau: tableauConfig, powerbi: powerBiConfig };
 const LIVEBOARDS = { tableau: TableauLiveboardEmbed, powerbi: PowerBiLiveboardEmbed };
 const SUBJECT = {
@@ -38,7 +39,15 @@ function requestEmbedToken(context) {
 }
 
 let mounted = null;
-let inited = false;
+
+// The auth-token callback reads whatever view is open now; openSpotterPanel keeps
+// this pointed at the latest context right before it renders.
+let currentContext = { platform: location.host.includes('powerbi') ? 'powerbi' : 'tableau' };
+
+// init() is global to the page and only needs to run once. Do it as soon as the
+// content script loads — not on the first panel open — so opening Spotter is
+// instant and we never re-init per view.
+initSpotter({ thoughtSpotHost: thoughtSpotConfig.host, getAuthToken: () => requestEmbedToken(currentContext) });
 
 export function closeSpotterPanel() {
   if (mounted) mounted.remove();
@@ -49,6 +58,8 @@ export async function openSpotterPanel(context, hostClass) {
   closeSpotterPanel();
 
   const platform = context.platform === 'powerbi' ? 'powerbi' : 'tableau';
+  const isLiveboard = Boolean(context.liveboardId);
+  const noun = isLiveboard ? 'Liveboard' : 'Spotter';
   const cfg = CONFIGS[platform];
 
   const host = document.createElement('aside');
@@ -62,9 +73,9 @@ export async function openSpotterPanel(context, hostClass) {
   host.style.setProperty('--ts-panel-muted', c.textSecondary);
   host.style.setProperty('--ts-panel-accent', c.primary);
   host.style.setProperty('--ts-panel-font', c.font);
-  host.innerHTML = '<header class="ts-spotter-inpage-head"><strong>Spotter</strong>'
+  host.innerHTML = '<header class="ts-spotter-inpage-head"><strong>' + noun + '</strong>'
     + '<span class="ts-spotter-inpage-subject"></span>'
-    + '<button type="button" class="ts-spotter-inpage-close" aria-label="Close Spotter">&times;</button></header>'
+    + '<button type="button" class="ts-spotter-inpage-close" aria-label="Close ' + noun + '">&times;</button></header>'
     + '<div class="ts-spotter-inpage-status" hidden></div>'
     + '<div class="ts-spotter-embed-mount"></div>';
   document.body.appendChild(host);
@@ -82,6 +93,7 @@ export async function openSpotterPanel(context, hostClass) {
   if (context.worksheetName) bits.push('model: ' + context.worksheetName);
   host.querySelector('.ts-spotter-inpage-subject').textContent = bits.join(' · ');
 
+  currentContext = context;
   showStatus('Connecting to ThoughtSpot…', false);
   // init() is global to the page, so only ever call it once.
   if (!inited) {
@@ -113,17 +125,16 @@ export async function openSpotterPanel(context, hostClass) {
     return;
   }
 
-  const embed = new EMBEDS[platform](host.querySelector('.ts-spotter-embed-mount'), { worksheetId: context.worksheetId });
   embed.on('load', () => showStatus('', false));
   embed.on('error', (payload) => {
-    console.error('SpotterEmbed error', payload);
-    showStatus('Spotter could not load.', true);
+    console.error(noun + ' embed error', payload);
+    showStatus(noun + ' could not load.', true);
   });
   try {
     await embed.render();
   } catch (err) {
     console.error(err);
-    showStatus('Spotter could not load: ' + ((err && err.message) || err), true);
+    showStatus(noun + ' could not load: ' + ((err && err.message) || err), true);
   }
 }
 

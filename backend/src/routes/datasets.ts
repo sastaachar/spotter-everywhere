@@ -181,11 +181,23 @@ export function registerDatasetRoutes(app: Hono, deps: Deps): void {
       c.header('Cache-Control', 'no-store');
       c.header('X-Accel-Buffering', 'no'); // don't let a proxy buffer the stream
       return stream(c, async (s) => {
+        // Serialized writes + a heartbeat so the long Falcon load doesn't leave
+        // the stream idle long enough for the MV3 worker/connection to be torn
+        // down ("network error").
+        let chain: Promise<unknown> = Promise.resolve();
+        const write = (obj: Record<string, unknown>): Promise<unknown> => {
+          chain = chain.then(() => s.write(JSON.stringify(obj) + '\n')).catch(() => {});
+          return chain;
+        };
+        const heartbeat = setInterval(() => { void write({ stage: 'heartbeat', status: 'active' }); }, 5000);
         try {
-          const result = await buildDataset(tsEnv, hostBase, groups, params, async (e) => { await s.write(JSON.stringify(e) + '\n'); });
-          await s.write(JSON.stringify({ stage: 'result', status: result.status, ...result.body }) + '\n');
+          const result = await buildDataset(tsEnv, hostBase, groups, params, async (e) => { await write(e); });
+          await write({ stage: 'result', status: result.status, ...result.body });
         } catch (e) {
-          await s.write(JSON.stringify({ stage: 'result', status: 500, error: 'internal_error', detail: (e as Error).message }) + '\n');
+          await write({ stage: 'result', status: 500, error: 'internal_error', detail: (e as Error).message });
+        } finally {
+          clearInterval(heartbeat);
+          await chain;
         }
       });
     }

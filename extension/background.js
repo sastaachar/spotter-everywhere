@@ -10,6 +10,7 @@ const EMBED_TOKEN = 'spotter:embed-token';
 const CACHE_GET = 'spotter:cache-get';
 const CACHE_SET = 'spotter:cache-set';
 const DATASET_STREAM = 'spotter:dataset-stream';
+const LIVEBOARD_STREAM = 'spotter:liveboard-stream';
 
 // Per-sheet resume cache (chrome.storage.local): lets a reload/reopen skip the
 // slow "pull rows -> load into ThoughtSpot" pipeline and open the worksheet we
@@ -91,12 +92,12 @@ async function createDataset(payload) {
 // Streaming variant of /dataset: POST ?stream=1 and forward each NDJSON line to
 // the content script over `port`. The final line is the {stage:'result',...}
 // body; we send {done:true} when the stream ends, {error} on any failure.
-async function streamDataset(payload, port) {
+async function streamBuild(path, failLabel, payload, port) {
   const safePost = (m) => { try { port.postMessage(m); } catch (e) { /* port closed */ } };
   if (!config.backendUrl) { safePost({ error: 'No backend configured (see extension/src/config.js).' }); return; }
   let res;
   try {
-    res = await fetch(new URL('/dataset?stream=1', config.backendUrl), {
+    res = await fetch(new URL(path, config.backendUrl), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -114,7 +115,7 @@ async function streamDataset(payload, port) {
     let body = null;
     try { body = await res.json(); } catch { body = null; }
     const detail = (body && (body.detail || body.error)) || ('HTTP ' + res.status);
-    safePost({ error: 'Worksheet build failed: ' + detail });
+    safePost({ error: failLabel + ': ' + detail });
     return;
   }
   const reader = res.body.getReader();
@@ -142,6 +143,11 @@ async function streamDataset(payload, port) {
     safePost({ error: 'Stream read failed: ' + ((err && err.message) || String(err)) });
   }
 }
+
+// Streaming /dataset (worksheet build) and /create-liveboard, each over its own
+// Port. Same NDJSON transport; only the path and error label differ.
+const streamDataset = (payload, port) => streamBuild('/dataset?stream=1', 'Worksheet build failed', payload, port);
+const streamLiveboard = (payload, port) => streamBuild('/create-liveboard?stream=1', 'Liveboard build failed', payload, port);
 
 // Read-only: does the user / data model / worksheet already exist for this
 // sheet? Lets the panel show what's done and skip rebuilding. Never throws — a
@@ -286,10 +292,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 // Streaming needs more than one message back, which onMessage can't do, so the
 // content script opens a Port: it sends one { payload }, we stream events back.
 chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== DATASET_STREAM) return;
+  const run = port.name === DATASET_STREAM ? streamDataset
+    : port.name === LIVEBOARD_STREAM ? streamLiveboard
+    : null;
+  if (!run) return;
   port.onMessage.addListener(async (msg) => {
     const payload = msg && msg.payload;
     if (!payload) { try { port.postMessage({ error: 'no payload' }); } catch (e) {} return; }
-    try { await streamDataset(payload, port); } finally { try { port.disconnect(); } catch (e) {} }
+    try { await run(payload, port); } finally { try { port.disconnect(); } catch (e) {} }
   });
 });

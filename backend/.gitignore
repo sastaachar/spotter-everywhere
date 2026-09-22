@@ -6,3 +6,6 @@ coverage/
 .wrangler/
 package-lock.json
 cluster-ca.pem
+
+logs/
+*.log

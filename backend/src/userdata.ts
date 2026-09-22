@@ -151,6 +151,30 @@ export interface UploadedDataset {
  * Orchestrate a fresh CSV upload into Falcon: cache -> read schema -> name the
  * table -> create+load. Returns the created table id + detected columns.
  */
+// A load cycle already running on the same Falcon table rejects a new load with
+// LOAD_CYCLE_CONFLICTS; it clears once that cycle finishes. Retry a few times
+// with a pause so a slow or leftover cycle self-heals instead of failing the
+// build. (Concurrent builds are already prevented upstream, but a cycle from an
+// earlier crashed run can still linger.)
+const LOAD_CONFLICT = /LOAD_CYCLE_CONFLICTS|load cycle .*IN_PROGRESS/i;
+const NO_SCHEMA = /can not find table schema|schema for dml/i;
+
+async function retryOnLoadCycle<T>(fn: () => Promise<T>, tries = 4, delayMs = 4000): Promise<T> {
+  for (let i = 0; ; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      const msg = (e as Error).message || '';
+      if (i < tries - 1 && LOAD_CONFLICT.test(msg)) {
+        console.warn(`[userdata] load cycle busy, retry ${i + 1}/${tries - 1} in ${delayMs}ms`);
+        await new Promise((r) => setTimeout(r, delayMs));
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
 export async function uploadCsvDataset(
   env: TsEnv,
   csv: string,
@@ -170,7 +194,7 @@ export async function uploadCsvDataset(
   // the worksheet TML binds its table BY NAME, so it can resolve to an older
   // copy and serve stale rows. Re-syncing with dropexistingdata keeps one
   // table, one id, and guarantees the rows are the ones just extracted.
-  const existingId = await findMetadataId(env, tableName);
+  let existingId = await findMetadataId(env, tableName);
   if (existingId) {
     // loaddata writes into the existing schema, so it fails outright when the
     // source's shape has changed (a visual gaining or losing a column). Drop

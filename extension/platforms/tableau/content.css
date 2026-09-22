@@ -291,6 +291,9 @@
 
 /* Liveboard button — one per embed, pinned to the frame's top-right. Filled and
    distinct from the outlined, per-viz Spotter button. */
+/* Same blue family and pill shape as .ts-spotter-btn, so the two read as one
+   set. Difference: this one is filled (primary) and pinned top-right, where the
+   per-viz Spotter button is an outline. */
 .ts-lb-btn {
   all: initial;
   position: fixed;
@@ -300,14 +303,65 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 5px 12px;
-  border-radius: 14px;
-  background: #7a3ff2;
+  padding: 4px 10px;
+  border: 1px solid #2770ef;
+  border-radius: 12px;
+  background: #2770ef;
   color: #ffffff;
   font: 600 12px/16px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   cursor: pointer;
+  vertical-align: middle;
+  user-select: none;
   white-space: nowrap;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 1px 3px rgba(39, 112, 239, 0.28);
 }
-.ts-lb-btn:hover { background: #6a2fe0; }
-.ts-lb-btn:focus-visible { outline: 2px solid #7a3ff2; outline-offset: 1px; }
+.ts-lb-btn:hover { background: #1b5fd0; border-color: #1b5fd0; }
+.ts-lb-btn:focus-visible { outline: 2px solid #2770ef; outline-offset: 1px; }
+
+/* Always-present modal controls (Retry + close) on the loading/checklist card,
+   pinned top-right so a slow or failed step never traps the user. */
+.ts-spotter-modal-controls {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 3;
+}
+.ts-spotter-modal-btn {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  font: 500 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.ts-spotter-modal-retry {
+  padding: 6px 12px;
+  border: 1px solid #2770ef;
+  border-radius: 12px;
+  background: #2770ef;
+  color: #ffffff;
+}
+.ts-spotter-modal-retry:hover { background: #1b5fd0; border-color: #1b5fd0; }
+.ts-spotter-modal-close {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  font-size: 20px;
+  color: #605e5c;
+  background: rgba(0, 0, 0, 0.05);
+}
+.ts-spotter-modal-close:hover { background: rgba(0, 0, 0, 0.12); color: #1a1a1a; }
+.ts-spotter-steps-error {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #fdecea;
+  color: #a4262c;
+  font-size: 13px;
+  line-height: 1.4;
+  max-width: 460px;
+}

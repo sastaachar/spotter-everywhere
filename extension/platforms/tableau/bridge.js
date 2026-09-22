@@ -98,19 +98,30 @@
     const vm = window.tableau && window.tableau.VizManager;
     const vizs = vm ? vm.getVizs() : [];
     const out = [];
+    let dashboard = null;
     for (const viz of vizs) {
       const sheet = viz.getWorkbook().getActiveSheet();
+      if (!dashboard) dashboard = sheet.getName(); // the active tab, so the board is scoped to it
       const list = sheet.getSheetType() === 'dashboard' ? sheet.getWorksheets() : [sheet];
       for (const w of list) out.push({ name: w.getName() });
     }
-    return { worksheets: out };
+    return { dashboard, worksheets: out };
   }
 
   const HANDLERS = { summary: describe, underlying, worksheets, user: () => Promise.resolve(getUserInfo()) };
+  // These need the Tableau viz API, which only lives in the frame that renders
+  // the viz. The bridge runs in every frame now (embedded mode nests the viz in
+  // an iframe), so a frame without the viz must stay silent rather than answer.
+  const NEEDS_VIZ = new Set(['summary', 'underlying', 'worksheets']);
+  const hasViz = () => {
+    const vm = window.tableau && window.tableau.VizManager;
+    return !!(vm && vm.getVizs && vm.getVizs().length);
+  };
 
   window.addEventListener('message', (ev) => {
     if (ev.origin !== location.origin || !ev.data || ev.data.type !== REQUEST) return;
     const { requestId, worksheet, kind } = ev.data;
+    if (NEEDS_VIZ.has(kind) && !hasViz()) return; // not our frame — let the viz frame reply
     const reply = (payload) =>
       ev.source && ev.source.postMessage({ type: RESPONSE, requestId, ...payload }, ev.origin);
     const handler = HANDLERS[kind] || describe;

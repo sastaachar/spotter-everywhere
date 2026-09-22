@@ -86,3 +86,89 @@ export function parseTableauColumns(xml: string): Column[] {
   visit(doc);
   return out;
 }
+
+// ── Workbook structure (dashboards → worksheets → chart) ────────────────────
+// The flat column parser above is enough to build a data model, but a faithful
+// liveboard must mirror the workbook's tabs (dashboards) and each tab's charts
+// (worksheets). This reads that structure straight from the .twb XML.
+
+export interface WorksheetViz {
+  /** Tableau mark class: Bar, Line, Area, Circle, Square, Multipolygon, Automatic… */
+  mark: string;
+  /** Field names referenced on the rows/cols shelves, in shelf order. */
+  fields: string[];
+  /** Field names used as categorical filters on this worksheet. */
+  filters: string[];
+}
+
+export interface DashboardSpec {
+  name: string;
+  /** Worksheet names placed on this dashboard, in first-seen order. */
+  worksheets: string[];
+}
+
+export interface WorkbookStructure {
+  dashboards: DashboardSpec[];
+  worksheets: Record<string, WorksheetViz>;
+}
+
+// Grab every <tag ... name='X'> … </tag> block. Worksheets and dashboards never
+// nest inside their own kind, so a plain indexOf to the close tag is safe.
+function namedBlocks(xml: string, tag: string): { name: string; body: string }[] {
+  const out: { name: string; body: string }[] = [];
+  const open = new RegExp(`<${tag}\\b[^>]*?\\bname='([^']*)'[^>]*?>`, 'g');
+  let m: RegExpExecArray | null;
+  while ((m = open.exec(xml))) {
+    const start = m.index + m[0].length;
+    const close = xml.indexOf(`</${tag}>`, start);
+    out.push({ name: m[1] ?? '', body: close === -1 ? '' : xml.slice(start, close) });
+  }
+  return out;
+}
+
+// Pull user-facing field names out of a rows/cols shelf string. Shelf tokens look
+// like `[federated.<id>].[<agg>:<Field>:<suffix>]`, `[<Field>]`, or `[:Measure
+// Names]`. Keep the human field name; drop datasource ids, internals, calcs.
+function shelfFields(shelf: string): string[] {
+  const out: string[] = [];
+  const re = /\[([^\]]+)\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(shelf))) {
+    const inner = m[1];
+    if (!inner || /^federated\./i.test(inner) || inner.startsWith('__') || inner.startsWith(':')) continue;
+    const parts = inner.split(':');
+    // `<agg>:<Field>:<suffix>` -> Field (second-to-last); plain `[Field]` -> Field.
+    const name = ((parts.length >= 3 ? parts[parts.length - 2] : inner) ?? '').trim();
+    if (name && !out.includes(name)) out.push(name);
+  }
+  return out;
+}
+
+export function parseWorkbookStructure(xml: string): WorkbookStructure {
+  const worksheets: Record<string, WorksheetViz> = {};
+  for (const { name, body } of namedBlocks(xml, 'worksheet')) {
+    const mark = (body.match(/<mark\b[^>]*\bclass='([^']*)'/) || [])[1] || 'Automatic';
+    const shelves = [
+      ...body.matchAll(/<rows>([\s\S]*?)<\/rows>/g),
+      ...body.matchAll(/<cols>([\s\S]*?)<\/cols>/g),
+    ].map((x) => x[1] ?? '').join(' ');
+    // Categorical filters the workbook author put on this worksheet.
+    const filterCols = [...body.matchAll(/<filter class='categorical' column='([^']*)'/g)].map((m) => m[1] ?? '').join(' ');
+    worksheets[name] = { mark, fields: shelfFields(shelves), filters: shelfFields(filterCols) };
+  }
+
+  const wsNames = new Set(Object.keys(worksheets));
+  const dashboards: DashboardSpec[] = [];
+  for (const { name, body } of namedBlocks(xml, 'dashboard')) {
+    const seen = new Set<string>();
+    const list: string[] = [];
+    const zre = /\bname='([^']*)'/g;
+    let z: RegExpExecArray | null;
+    while ((z = zre.exec(body))) {
+      const w = z[1];
+      if (w && wsNames.has(w) && !seen.has(w)) { seen.add(w); list.push(w); }
+    }
+    dashboards.push({ name, worksheets: list });
+  }
+  return { dashboards, worksheets };
+}
