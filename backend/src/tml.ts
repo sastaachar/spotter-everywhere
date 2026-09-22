@@ -146,6 +146,12 @@ export interface LiveboardSource {
   roles?: string[];
   /** Rows behind the tile, so a long category list can be laid out sideways. */
   rowCount?: number;
+  /** The report page this came from. Sources sharing one become a tab. */
+  page?: string;
+  /** Rendered text, for a visual that carries prose rather than data — a text
+   *  box or a narrative. Such a source has no worksheet and becomes a note
+   *  tile, which is how ThoughtSpot holds text on a liveboard. */
+  text?: string;
 }
 
 /**
@@ -261,6 +267,26 @@ function chartTypeFor(source: LiveboardSource, dims: Column[], measures: Column[
   return 'COLUMN';
 }
 
+/** Escape text for an HTML note tile, so prose cannot inject markup. */
+function esc(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * A note tile: a visualization with a `note_tile` and no `answer`. It is how a
+ * liveboard holds text, so a report's narratives and text boxes survive the
+ * crossing instead of being dropped as "not data".
+ */
+function noteTile(id: string, text: string): string[] {
+  const paragraphs = text.split(/\n{2,}/).map((para) => para.trim()).filter(Boolean);
+  return [
+    `  - id: ${id}`,
+    '    note_tile:',
+    '      html_parsed_string: |-',
+    ...paragraphs.map((para) => `        <p>${esc(para.replace(/\s*\n\s*/g, ' '))}</p>`),
+  ];
+}
+
 /**
  * Build a Liveboard TML spanning several worksheets — one tile per source, so a
  * report's liveboard mirrors the report: each visual becomes a visualization
@@ -277,6 +303,13 @@ export function generateLiveboardOverSources(name: string, sources: LiveboardSou
   const sizes: { width: number; height: number }[] = [];
 
   sources.forEach((source, index) => {
+    // Prose, not data: no worksheet to answer from, so it becomes a note tile.
+    if (source.text) {
+      vizzes.push(noteTile(`Viz_${index + 1}`, source.text));
+      // Tall enough to read without scrolling inside the tile.
+      sizes.push({ width: 4, height: 3 });
+      return;
+    }
     const columns = chartedColumns(source, mappedChart(source));
     const dims = columns.filter((c) => c.type === 'ATTRIBUTE');
     const measures = columns.filter((c) => c.type === 'MEASURE');
@@ -349,27 +382,47 @@ export function generateLiveboardOverSources(name: string, sources: LiveboardSou
   // a single KPI number occupy as much room as a chart, so each tile takes the
   // footprint its content needs and rows are packed left to right.
   const GRID_COLUMNS = 12;
-  const tiles: string[] = [];
-  let cursorX = 0;
-  let rowY = 0;
-  let rowHeight = 0;
-  vizzes.forEach((_, i) => {
-    const { width, height } = sizes[i]!;
-    if (cursorX + width > GRID_COLUMNS) {
-      rowY += rowHeight;
-      cursorX = 0;
-      rowHeight = 0;
-    }
-    tiles.push(
-      `    - visualization_id: Viz_${i + 1}`,
-      `      x: ${cursorX}`,
-      `      "y": ${rowY}`,
-      `      width: ${width}`,
-      `      height: ${height}`,
-    );
-    cursorX += width;
-    rowHeight = Math.max(rowHeight, height);
+  const packed = (members: number[], indent: string): string[] => {
+    const tiles: string[] = [];
+    let cursorX = 0;
+    let rowY = 0;
+    let rowHeight = 0;
+    members.forEach((i) => {
+      const { width, height } = sizes[i]!;
+      if (cursorX + width > GRID_COLUMNS) {
+        rowY += rowHeight;
+        cursorX = 0;
+        rowHeight = 0;
+      }
+      tiles.push(
+        `${indent}- visualization_id: Viz_${i + 1}`,
+        `${indent}  x: ${cursorX}`,
+        `${indent}  "y": ${rowY}`,
+        `${indent}  width: ${width}`,
+        `${indent}  height: ${height}`,
+      );
+      cursorX += width;
+      rowHeight = Math.max(rowHeight, height);
+    });
+    return tiles;
+  };
+
+  // One tab per report page, in the order the pages were read, so a multi-page
+  // report crosses over whole rather than one page at a time. A report that has
+  // only one page gets a plain tile list — a lone tab is just a header bar.
+  const pages: string[] = [];
+  sources.forEach((s) => {
+    const page = s.page || '';
+    if (!pages.includes(page)) pages.push(page);
   });
+
+  const layout = pages.length > 1
+    ? ['    tabs:', ...pages.flatMap((page) => [
+      `    - name: "${q(page || 'Report')}"`,
+      '      tiles:',
+      ...packed(sources.map((s, i) => (((s.page || '') === page) ? i : -1)).filter((i) => i >= 0), '      '),
+    ])]
+    : ['    tiles:', ...packed(sources.map((_, i) => i), '    ')];
 
   return [
     'liveboard:',
@@ -377,8 +430,7 @@ export function generateLiveboardOverSources(name: string, sources: LiveboardSou
     '  visualizations:',
     ...vizzes.flat(),
     '  layout:',
-    '    tiles:',
-    ...tiles,
+    ...layout,
     '',
   ].join('\n');
 }
