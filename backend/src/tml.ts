@@ -137,6 +137,46 @@ export interface LiveboardSource {
   /** Worksheet the tile answers from. */
   worksheetName: string;
   columns: Column[];
+  /** The source visual's own type, so the tile mirrors how it was drawn. */
+  visualType?: string;
+}
+
+/**
+ * How a source visual maps to a ThoughtSpot chart. A liveboard should look like
+ * the report it came from, so the source's own visual type leads and the data's
+ * shape only overrides it when the chart could not render — a chart needs a
+ * measure, and every chart but KPI needs something to plot it against.
+ *
+ * Power BI's map visuals fall back to a bar chart on purpose: GEO_AREA needs
+ * columns that ThoughtSpot has geo-mapped, and an uploaded VARCHAR is not.
+ */
+const CHART_BY_VISUAL: Record<string, string> = {
+  card: 'KPI', kpi: 'KPI', multiRowCard: 'KPI', gauge: 'KPI',
+  columnChart: 'COLUMN', clusteredColumnChart: 'COLUMN',
+  stackedColumnChart: 'STACKED_COLUMN', hundredPercentStackedColumnChart: 'STACKED_COLUMN',
+  barChart: 'BAR', clusteredBarChart: 'BAR',
+  stackedBarChart: 'BAR', hundredPercentStackedBarChart: 'BAR',
+  funnel: 'BAR', map: 'BAR', filledMap: 'BAR', shapeMap: 'BAR', azureMap: 'BAR',
+  lineChart: 'LINE', areaChart: 'AREA', stackedAreaChart: 'AREA',
+  lineClusteredColumnComboChart: 'LINE', lineStackedColumnComboChart: 'LINE',
+  pieChart: 'PIE', donutChart: 'PIE',
+  scatterChart: 'SCATTER',
+  tableEx: 'TABLE', pivotTable: 'TABLE', matrix: 'TABLE', slicer: 'TABLE',
+};
+
+/** Wide categories read better lying down than squeezed onto an x-axis. */
+const WIDE_CATEGORY_COUNT = 15;
+
+function chartTypeFor(source: LiveboardSource, dims: Column[], measures: Column[]): string {
+  if (!measures.length) return 'TABLE';
+  if (!dims.length) return 'KPI';
+  const mapped = source.visualType ? CHART_BY_VISUAL[source.visualType] : undefined;
+  // A card keeps its single number. Power BI gives those visuals a placeholder
+  // dimension ("Blank") that is not a real breakdown, so trusting the shape here
+  // would draw one lonely bar against a {Null} axis.
+  if (mapped) return mapped;
+  // Unknown visual type: pick on shape.
+  return dims.length > 1 ? 'TABLE' : 'COLUMN';
 }
 
 /**
@@ -144,41 +184,101 @@ export interface LiveboardSource {
  * report's liveboard mirrors the report: each visual becomes a visualization
  * answering from the worksheet loaded with that visual's own rows.
  *
- * A source with both a dimension and measures renders as a column chart, the
- * way the visual it came from does; anything else falls back to a table. TML
- * shape is version-sensitive — validate against the target cluster's
- * tml/export.
+ * A chart tile needs `chart_columns`, `axis_configs` and `display_mode:
+ * CHART_MODE` together; with the chart type alone ThoughtSpot renders the
+ * answer as a table. TML shape is version-sensitive — validate against the
+ * target cluster's tml/export.
  */
 export function generateLiveboardOverSources(name: string, sources: LiveboardSource[]): string {
   const vizzes: string[][] = [];
+  /** Grid footprint per tile, in 12-column units. */
+  const sizes: { width: number; height: number }[] = [];
 
   sources.forEach((source, index) => {
-    const id = `Viz_${index + 1}`;
-    const attrs = source.columns.filter((c) => c.type === 'ATTRIBUTE');
+    const dims = source.columns.filter((c) => c.type === 'ATTRIBUTE');
     const measures = source.columns.filter((c) => c.type === 'MEASURE');
-    const dim = attrs[0];
+    let chart = chartTypeFor(source, dims, measures);
+
     // Keep a tile readable: one dimension and a few measures, not every column.
-    const charted = dim ? measures.slice(0, 3) : [];
-    const names = dim && charted.length
-      ? [dim.name, ...charted.map((m) => m.name)]
-      : source.columns.map((c) => c.name);
+    const dim = dims[0];
+    const charted = measures.slice(0, 3);
+    const names = chart === 'TABLE'
+      ? source.columns.map((c) => c.name)
+      : chart === 'KPI'
+        ? charted.map((m) => m.name)
+        : [dim!.name, ...charted.map((m) => m.name)];
 
     const block = [
-      `  - id: ${id}`,
+      `  - id: Viz_${index + 1}`,
       '    answer:',
       `      name: "${q(source.title)}"`,
       '      tables:',
-      `      - name: "${q(source.worksheetName)}"`,
+      `      - id: "${q(source.worksheetName)}"`,
+      `        name: "${q(source.worksheetName)}"`,
       `      search_query: "${q(names.map((n) => `[${n}]`).join(' '))}"`,
       '      answer_columns:',
       ...names.map((n) => `      - name: "${q(n)}"`),
     ];
-    if (dim && charted.length) block.push('      chart:', '        type: COLUMN');
-    else block.push('      display_mode: TABLE_MODE');
+
+    if (chart === 'TABLE') {
+      block.push('      display_mode: TABLE_MODE');
+      // A table needs room for its rows.
+      sizes.push({ width: 6, height: 5 });
+      vizzes.push(block);
+      return;
+    }
+
+    block.push('      chart:', `        type: ${chart}`, '        chart_columns:');
+    for (const m of charted) block.push(`        - column_id: "${q(m.name)}"`);
+    // Every chart needs axis_configs, KPI included — with chart_columns alone
+    // the import fails. A KPI has no category, so it carries only the y axis.
+    if (chart === 'KPI') {
+      block.push(
+        '        axis_configs:',
+        '        - "y":',
+        ...charted.map((m) => `          - "${q(m.name)}"`),
+      );
+    } else {
+      block.push(`        - column_id: "${q(dim!.name)}"`);
+      block.push(
+        '        axis_configs:',
+        '        - x:',
+        `          - "${q(dim!.name)}"`,
+        '          "y":',
+        ...charted.map((m) => `          - "${q(m.name)}"`),
+      );
+    }
+    block.push('      display_mode: CHART_MODE');
+    // A KPI is one number — four fit on a row; charts sit two across.
+    sizes.push(chart === 'KPI' ? { width: 3, height: 3 } : { width: 6, height: 5 });
     vizzes.push(block);
   });
 
-  const tiles = vizzes.map((_, i) => [`    - visualization_id: Viz_${i + 1}`, '      size: MEDIUM']).flat();
+  // A liveboard lays out on a 12-column grid. Sizing every tile the same makes
+  // a single KPI number occupy as much room as a chart, so each tile takes the
+  // footprint its content needs and rows are packed left to right.
+  const GRID_COLUMNS = 12;
+  const tiles: string[] = [];
+  let cursorX = 0;
+  let rowY = 0;
+  let rowHeight = 0;
+  vizzes.forEach((_, i) => {
+    const { width, height } = sizes[i]!;
+    if (cursorX + width > GRID_COLUMNS) {
+      rowY += rowHeight;
+      cursorX = 0;
+      rowHeight = 0;
+    }
+    tiles.push(
+      `    - visualization_id: Viz_${i + 1}`,
+      `      x: ${cursorX}`,
+      `      "y": ${rowY}`,
+      `      width: ${width}`,
+      `      height: ${height}`,
+    );
+    cursorX += width;
+    rowHeight = Math.max(rowHeight, height);
+  });
 
   return [
     'liveboard:',

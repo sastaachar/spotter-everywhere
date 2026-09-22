@@ -190,7 +190,7 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
     let dataInput: { columns: { name: string; type?: string; dataType?: string }[]; rows: unknown[][] } | null = null;
     // One entry per source visual: the liveboard gets a tile per visual, each
     // answering from a worksheet loaded with that visual's own rows.
-    let datasetsInput: { title: string; columns: { name: string }[]; rows: unknown[][] }[] = [];
+    let datasetsInput: { title: string; visualType?: string; columns: { name: string }[]; rows: unknown[][] }[] = [];
     if (ct.includes('multipart/form-data')) {
       const form = await c.req.formData();
       platform = String(form.get('platform') ?? '');
@@ -214,9 +214,14 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
       const d = b.data as { columns?: { name: string; type?: string; dataType?: string }[]; rows?: unknown[][] } | undefined;
       if (d && Array.isArray(d.columns) && Array.isArray(d.rows)) dataInput = { columns: d.columns, rows: d.rows };
       if (Array.isArray(b.datasets)) {
-        datasetsInput = (b.datasets as { title?: string; name?: string; columns?: { name: string }[]; rows?: unknown[][] }[])
+        datasetsInput = (b.datasets as { title?: string; name?: string; visualType?: string; columns?: { name: string }[]; rows?: unknown[][] }[])
           .filter((d2) => d2 && Array.isArray(d2.columns) && d2.columns.length && Array.isArray(d2.rows) && d2.rows.length)
-          .map((d2, i) => ({ title: String(d2.title ?? d2.name ?? `Source ${i + 1}`), columns: d2.columns!, rows: d2.rows! }));
+          .map((d2, i) => ({
+            title: String(d2.title ?? d2.name ?? `Source ${i + 1}`),
+            visualType: d2.visualType ? String(d2.visualType) : undefined,
+            columns: d2.columns!,
+            rows: d2.rows!,
+          }));
       }
     }
 
@@ -302,6 +307,7 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
         const numeric = ds.columns.map((_, ci) => ds.rows.some((r) => typeof r[ci] === 'number'));
         sources.push({
           title: ds.title,
+          visualType: ds.visualType,
           worksheetName: ws.worksheetName,
           columns: ds.columns.map((col, ci) => ({
             id: `col_${ci}`,
