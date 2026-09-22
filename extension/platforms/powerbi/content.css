@@ -174,6 +174,8 @@
 /* In-page Spotter panel (src/inpage-panel.js). Colours come from
    ui/configs/power-bi-config.js via inline custom properties, so the panel
    chrome matches the Power BI palette the embed itself is themed with. */
+.ts-spotter-inpage-wide { width: 1180px !important; max-width: 96vw !important; }
+
 .ts-spotter-inpage {
   position: fixed; top: 0; right: 0; width: 760px; max-width: 95vw; height: 100vh;
   display: flex; flex-direction: column; box-sizing: border-box;
@@ -204,6 +206,7 @@
 .ts-spotter-inpage-close:hover { background: rgba(0, 0, 0, 0.06); }
 .ts-spotter-inpage-status { padding: 10px 14px; color: var(--ts-panel-muted, #605e5c); flex: 0 0 auto; }
 .ts-spotter-inpage-error { color: #a4262c; }
+.ts-spotter-inpage-progress { padding: 22px 26px; flex: 0 0 auto; }
 .ts-spotter-embed-mount { flex: 1 1 auto; min-height: 0; }
 .ts-spotter-embed-mount iframe { width: 100%; height: 100%; border: 0; display: block; }
 

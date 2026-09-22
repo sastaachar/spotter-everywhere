@@ -250,8 +250,15 @@ export function generateLiveboardOverSources(name: string, sources: LiveboardSou
       );
     }
     block.push('      display_mode: CHART_MODE');
-    // A KPI is one number — four fit on a row; charts sit two across.
-    sizes.push(chart === 'KPI' ? { width: 3, height: 3 } : { width: 6, height: 5 });
+    // Footprint follows the content: a single number needs a small card, a
+    // category chart needs width for its labels, and a long category list needs
+    // height rather than a squeezed axis.
+    const categories = chart === 'KPI' ? 0 : 1;
+    sizes.push(
+      chart === 'KPI' ? { width: 3, height: 2 }
+        : categories && charted.length > 1 ? { width: 6, height: 5 }
+          : { width: 4, height: 4 },
+    );
     vizzes.push(block);
   });
 
