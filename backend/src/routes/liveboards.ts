@@ -292,7 +292,14 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
       const sources: LiveboardSource[] = [];
       const loaded: { title: string; worksheetId: string }[] = [];
       for (const [i, ds] of datasetsInput.entries()) {
-        const wsName = `${name} · ${ds.title}`.slice(0, 80);
+        // Names are capped at 80 characters, so two visuals whose titles share a
+        // prefix — "Revenue won" and "Revenue Won and Revenue In Pipeline…" —
+        // can truncate to near-identical worksheet names, and a tile then fails
+        // to resolve its source. A short suffix off the full title keeps every
+        // worksheet distinct.
+        const suffix = Array.from(ds.title).reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7)
+          .toString(36).slice(0, 4);
+        const wsName = `${`${name} · ${ds.title}`.slice(0, 74)} ${suffix}`;
         let ws;
         try {
           ws = await loadDataset(tsEnv, wsName, ds.columns, ds.rows);
