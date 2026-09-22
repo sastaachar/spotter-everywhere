@@ -152,18 +152,28 @@ export interface LiveboardSource {
  * columns that ThoughtSpot has geo-mapped, and an uploaded VARCHAR is not.
  */
 const CHART_BY_VISUAL: Record<string, string> = {
+  // Single value
   card: 'KPI', kpi: 'KPI', multiRowCard: 'KPI', gauge: 'KPI',
+  // Columns (vertical)
   columnChart: 'COLUMN', clusteredColumnChart: 'COLUMN',
   stackedColumnChart: 'STACKED_COLUMN', hundredPercentStackedColumnChart: 'STACKED_COLUMN',
+  // Bars (horizontal)
   barChart: 'BAR', clusteredBarChart: 'BAR',
-  stackedBarChart: 'BAR', hundredPercentStackedBarChart: 'BAR',
-  funnel: 'BAR', map: 'BAR', filledMap: 'BAR', shapeMap: 'BAR', azureMap: 'BAR',
+  stackedBarChart: 'STACKED_BAR', hundredPercentStackedBarChart: 'STACKED_BAR',
+  // Lines and areas
   lineChart: 'LINE', areaChart: 'AREA', stackedAreaChart: 'AREA',
   lineClusteredColumnComboChart: 'LINE', lineStackedColumnComboChart: 'LINE',
-  pieChart: 'PIE', donutChart: 'PIE',
-  scatterChart: 'SCATTER',
+  // Parts of a whole
+  pieChart: 'PIE', donutChart: 'PIE', treemap: 'TREEMAP', funnel: 'FUNNEL',
+  waterfallChart: 'WATERFALL', scatterChart: 'SCATTER',
+  // Geography
+  map: 'GEO_BUBBLE', filledMap: 'GEO_AREA', shapeMap: 'GEO_AREA', azureMap: 'GEO_BUBBLE',
+  // Grids
   tableEx: 'TABLE', pivotTable: 'TABLE', matrix: 'TABLE', slicer: 'TABLE',
 };
+
+/** Charts that plot a geography rather than a category axis. */
+const GEO_CHARTS = new Set(['GEO_AREA', 'GEO_BUBBLE']);
 
 /** Wide categories read better lying down than squeezed onto an x-axis. */
 const WIDE_CATEGORY_COUNT = 15;
@@ -364,19 +374,28 @@ export function generateWorksheetOnTable(
 // single loaded worksheet model. Fields are resolved against that model's
 // columns; a worksheet whose fields aren't in the model (calc/param-only) is
 // skipped, and an otherwise-empty tab gets a summary table so it isn't blank.
-// Chart types are limited to the set the cluster validated: COLUMN, BAR, LINE,
-// AREA, SCATTER, PIE, and TABLE_MODE (KPI is rejected on import).
+// Chart types are the set the cluster validated: KPI, COLUMN, BAR, STACKED_*,
+// LINE, AREA, SCATTER, PIE, FUNNEL, TREEMAP, WATERFALL, HEATMAP, GEO_AREA,
+// GEO_BUBBLE and TABLE_MODE.
 
 function chartFor(mark: string, dims: string[], measures: string[]): string {
   const m = (mark || '').toLowerCase();
   // A scatter is two measures against each other; keep it even with no dimension.
   if (m === 'circle' && measures.length >= 2) return 'SCATTER';
-  if (measures.length && dims.length === 0) return 'TABLE_MODE';
+  // A single number with nothing to break it down by is a KPI. It used to fall
+  // back to a table because KPI was thought to be rejected on import — it is
+  // not, it just needs axis_configs like every other chart.
+  if (measures.length && dims.length === 0) return 'KPI';
   if (m === 'line') return 'LINE';
   if (m === 'area') return 'AREA';
   if (m === 'circle') return 'COLUMN';
   if (m === 'pie') return 'PIE';
-  if (m === 'square' || m === 'map' || m.includes('polygon')) return 'TABLE_MODE';
+  // Tableau draws filled maps with polygons; ThoughtSpot's equivalent is an
+  // area map, and a plotted point map is a bubble map.
+  if (m.includes('polygon')) return 'GEO_AREA';
+  if (m === 'map') return 'GEO_BUBBLE';
+  if (m === 'square') return 'HEATMAP';
+  if (m === 'gantt') return 'BAR';
   if (m === 'bar') return 'COLUMN';
   if (dims.length && measures.length) return 'COLUMN';
   return 'TABLE_MODE';
@@ -392,15 +411,15 @@ export function generateTabbedLiveboardTml(
   columns: Column[],
 ): string {
   const byName = new Map(columns.map((c) => [c.name.toLowerCase(), c]));
-  interface V { id: string; title: string; query: string; cols: string[]; chart: string }
+  interface V { id: string; title: string; query: string; cols: string[]; chart: string; measures: string[] }
   const vizzes: V[] = [];
   const tabs: { name: string; ids: string[] }[] = [];
   const filterFields: string[] = []; // dimensions the workbook filters on, in first-seen order
   let n = 0;
 
-  const addViz = (title: string, cols: string[], chart: string): string => {
+  const addViz = (title: string, cols: string[], chart: string, measures: string[] = []): string => {
     const id = `Viz_${++n}`;
-    vizzes.push({ id, title, query: cols.map((c) => `[${c}]`).join(' '), cols, chart });
+    vizzes.push({ id, title, query: cols.map((c) => `[${c}]`).join(' '), cols, chart, measures });
     return id;
   };
 
@@ -419,7 +438,7 @@ export function generateTabbedLiveboardTml(
       }
       const cols = [...dims, ...measures];
       if (!cols.length) continue; // nothing in this viz maps to the model
-      ids.push(addViz(wsName, cols, chartFor(ws.mark, dims, measures)));
+      ids.push(addViz(wsName, cols, chartFor(ws.mark, dims, measures), measures));
       // Carry over the worksheet's categorical filters (dimensions in the model).
       for (const f of ws.filters) {
         const col = byName.get(f.toLowerCase());
@@ -449,10 +468,25 @@ export function generateTabbedLiveboardTml(
       '      answer_columns:',
       ...v.cols.map((c) => `      - name: "${q(c)}"`),
     );
-    // A chart needs display_mode: CHART_MODE too — with only a chart type the
-    // answer defaults to TABLE_MODE and renders as a table.
-    if (v.chart === 'TABLE_MODE') lines.push('      display_mode: TABLE_MODE');
-    else lines.push('      display_mode: CHART_MODE', '      chart:', `        type: ${v.chart}`);
+    // A chart needs chart_columns and axis_configs as well as display_mode:
+    // CHART_MODE. Given the type alone the answer renders as a table, and KPI
+    // fails the import outright with a bare "Index: 0".
+    if (v.chart === 'TABLE_MODE') {
+      lines.push('      display_mode: TABLE_MODE');
+    } else {
+      // Columns arrive measures-last from addViz, so the category is the first
+      // non-measure; a KPI has none.
+      const measures = v.cols.filter((c) => v.measures.includes(c));
+      const dim = v.cols.find((c) => !v.measures.includes(c));
+      lines.push('      chart:', `        type: ${v.chart}`, '        chart_columns:');
+      for (const m of measures) lines.push(`        - column_id: "${q(m)}"`);
+      if (dim) lines.push(`        - column_id: "${q(dim)}"`);
+      lines.push('        axis_configs:');
+      if (dim) lines.push('        - x:', `          - "${q(dim)}"`, '          "y":');
+      else lines.push('        - "y":');
+      for (const m of measures) lines.push(`          - "${q(m)}"`);
+      lines.push('      display_mode: CHART_MODE');
+    }
   }
   lines.push('  tabs:');
   for (const t of tabs) {
