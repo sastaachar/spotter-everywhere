@@ -416,7 +416,10 @@ export function generateLiveboardOverSources(name: string, sources: LiveboardSou
     // category chart needs width for its labels, and a long category list needs
     // height rather than a squeezed axis.
     sizes.push(
-      chart === 'KPI' ? { width: 3, height: 2 }
+      // A card needs three rows, not two. Two is enough on a full-width board
+      // and clips the figure the moment the board is narrower — embedded in
+      // someone else's page, "US$11,429,826" lost its bottom edge.
+      chart === 'KPI' ? { width: 3, height: 3 }
         : PIVOT_CHARTS.has(chart) ? { width: 6, height: 5 }
           : charted.length > 1 ? { width: 6, height: 5 }
             : { width: 4, height: 4 },
@@ -429,7 +432,7 @@ export function generateLiveboardOverSources(name: string, sources: LiveboardSou
   // footprint its content needs and rows are packed left to right.
   const GRID_COLUMNS = 12;
   /** Single-number cards lead, as they do on the report they came from. */
-  const headline = (i: number) => sizes[i]!.width <= 3 && sizes[i]!.height <= 2;
+  const headline = (i: number) => sizes[i]!.width <= 3 && sizes[i]!.height <= 3;
   const packed = (members: number[], indent: string): string[] => {
     // Cards first, so they form a band across the top instead of being dealt
     // between the charts and leaving a ragged hole in every row.
