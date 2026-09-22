@@ -648,9 +648,10 @@
     setStep('read', 'done', datasets.length + ' visuals');
 
     setStep('build', 'active', 'loading ' + datasets.length + ' datasets');
-    const built = await ask(CREATE_LIVEBOARD, {
-      platform: PLATFORM, guid, name: context.reportTitle || undefined, datasets,
-    });
+    // No `name`: the route keys on it when present, while /get-liveboard keys on
+    // the guid, so passing a title made the two disagree and the reuse check
+    // never matched what had been built.
+    const built = await ask(CREATE_LIVEBOARD, { platform: PLATFORM, guid, datasets });
     const body = built.body || {};
     if (body.liveboardId) setStep('build', 'done');
     if (!body.liveboardId) {
