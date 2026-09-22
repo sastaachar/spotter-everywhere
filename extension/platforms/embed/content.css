@@ -23,6 +23,10 @@
   user-select: none;
   white-space: nowrap;
 }
+/* `all: initial` plus an explicit display beats the browser's own
+   `[hidden] { display: none }`, so hiding the button had no effect at all —
+   it kept sitting on top of the report's controls with hidden="" set. */
+.ts-embed-btn[hidden] { display: none !important; }
 .ts-embed-btn svg { width: 13px; height: 13px; fill: #f2c811; }
 .ts-embed-btn:hover { background: #f8f8f8; }
 .ts-embed-btn:focus-visible { outline: 2px solid #f2c811; outline-offset: 2px; }
@@ -32,6 +36,9 @@
 .ts-embed-panel {
   all: initial;
   display: block;
+  /* Never taller than the window: a report whose bottom is off-screen takes its
+     docked controls with it. */
+  max-height: calc(100vh - 24px);
   box-sizing: border-box;
   margin: 20px 0;
   border: 1px solid #e6e6e6;
@@ -97,5 +104,8 @@
 [data-spotter-embed-here] > .ts-embed-panel iframe {
   flex: 1 1 auto;
   height: auto;
-  min-height: 560px;
+  /* No floor here: the slot already says how much room there is, and forcing a
+     taller frame pushed the panel past the fold — which put the report's own
+     docked controls, the Liveboard button among them, on the viewport edge. */
+  min-height: 0;
 }
