@@ -4,8 +4,6 @@
 export interface TsEnv { host: string; token: string; }
 
 // ── Shared REST request helper ─────────────────────────────────────────────
-// Returns `unknown` on purpose: cluster response shapes vary by version, so
-// callers extract what they need (findGuid / findMetadataId / walks) instead.
 async function ts(env: TsEnv, path: string, body: unknown): Promise<unknown> {
   const res = await fetch(`${env.host.replace(/\/$/, '')}${path}`, {
     method: 'POST',

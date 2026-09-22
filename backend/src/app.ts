@@ -238,7 +238,6 @@ export function createApp(options: AppOptions) {
   app.use(bearerAuth(options.apiKey));
 
   // ── Sessions ─────────────────────────────────────────────────────────────
-  // Ephemeral capture of a platform view's data + context, for debug/inspection.
 
   app.post('/session', bodyLimit({ maxSize: options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES }), async (c) => {
     let body: unknown;
