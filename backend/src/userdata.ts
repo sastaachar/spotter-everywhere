@@ -139,6 +139,9 @@ export function extractTableId(result: SchemaAndErrors): string | undefined {
 }
 
 export interface UploadedDataset {
+  /** The same-named table was dropped and rebuilt, so any worksheet over it is
+   *  bound to a table that no longer exists and has to be rebuilt too. */
+  recreated?: boolean;
   cacheToken: string;
   tableId?: string;
   tableName: string;
@@ -194,7 +197,8 @@ export async function uploadCsvDataset(
   // the worksheet TML binds its table BY NAME, so it can resolve to an older
   // copy and serve stale rows. Re-syncing with dropexistingdata keeps one
   // table, one id, and guarantees the rows are the ones just extracted.
-  let existingId = await findMetadataId(env, tableName);
+  let recreated = false;
+  const existingId = await findMetadataId(env, tableName);
   if (existingId) {
     // loaddata writes into the existing schema, so it fails outright when the
     // source's shape has changed (a visual gaining or losing a column). Drop
@@ -215,6 +219,7 @@ export async function uploadCsvDataset(
     } catch (e) {
       console.warn(`[uploadCsvDataset] reload of "${tableName}" failed, recreating:`, (e as Error).message);
     }
+    recreated = true;
     await deleteTable(env, existingId).catch((e: Error) => {
       console.error(`[uploadCsvDataset] could not drop "${tableName}":`, e.message);
     });
@@ -222,6 +227,7 @@ export async function uploadCsvDataset(
 
   const created = await createTable(env, schema);
   return {
+    recreated,
     cacheToken,
     tableId: extractTableId(created),
     tableName,

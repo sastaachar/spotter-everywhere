@@ -1,5 +1,5 @@
 import { SessionStore } from './session';
-import { mintUserToken, findMetadataId, importTml, findGuid, shareMetadata } from './thoughtspot';
+import { mintUserToken, findMetadataId, importTml, findGuid, shareMetadata, deleteMetadata } from './thoughtspot';
 import { generateWorksheetOnTable } from './tml';
 import { rowsToCsv } from './csv';
 import { uploadCsvDataset } from './userdata';
@@ -94,6 +94,17 @@ export function makeDeps(options: AppOptions): Deps {
     const dataset = await uploadCsvDataset(env, rowsToCsv(columns, rows), tableName);
     const tableId = dataset.tableId ?? (await findMetadataId(env, tableName));
     let worksheetId = await findMetadataId(env, wsName, 'LOGICAL_TABLE');
+    // A rebuilt table leaves its worksheet pointing at the dropped one, and the
+    // tiles then fail with "the visualisation data could not be retrieved".
+    // Drop the stale worksheet so it is regenerated over the new table.
+    if (worksheetId && dataset.recreated) {
+      try {
+        await deleteMetadata(env, worksheetId, 'LOGICAL_TABLE');
+        worksheetId = undefined;
+      } catch (e) {
+        console.error('[loadDataset] could not drop the stale worksheet:', (e as Error).message);
+      }
+    }
     if (!worksheetId && dataset.loaded && dataset.columns.length && tableId) {
       const imp = await importTml(env, [generateWorksheetOnTable(wsName, tableName, dataset.columns)]);
       worksheetId = findGuid(imp, wsName) ?? (await findMetadataId(env, wsName, 'LOGICAL_TABLE'));

@@ -248,6 +248,12 @@ export async function importTml(env: TsEnv, tmls: string[]): Promise<unknown> {
   return result;
 }
 
+/** Delete one metadata object by GUID. Used to clear an object that has become
+ *  stale — a worksheet whose table was rebuilt underneath it, say. */
+export async function deleteMetadata(env: TsEnv, id: string, type = 'LOGICAL_TABLE'): Promise<void> {
+  await ts(env, '/api/rest/2.0/metadata/delete', { metadata: [{ identifier: id, type }] });
+}
+
 /** Resolve a metadata object's GUID by name via v2 search (reliable, unlike
  *  parsing internal upload responses). Defaults to LOGICAL_TABLE. */
 export async function findMetadataId(env: TsEnv, name: string, type = 'LOGICAL_TABLE'): Promise<string | undefined> {
