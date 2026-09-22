@@ -59,10 +59,16 @@
     + '<path d="M8 1l1.6 4.4L14 7l-4.4 1.6L8 13l-1.6-4.4L2 7l4.4-1.6z"/>'
     + '<path d="M13 11l.7 1.8L15.5 13.5l-1.8.7L13 16l-.7-1.8-1.8-.7 1.8-.7z"/></svg>';
 
-  /** Where the report should go: into the page's own content, not over it. */
+  /**
+   * Where the report goes: into the page's own content, not over it.
+   *
+   * A page that marks a slot gets the report *in* that slot, replacing whatever
+   * placeholder it was holding — otherwise the page ends up showing two report
+   * areas, its own empty one and ours below it, which reads as a mistake.
+   */
   function mountPoint() {
-    const named = document.querySelector('[data-spotter-embed-here]');
-    if (named) return named;
+    const slot = document.querySelector('[data-spotter-embed-here]');
+    if (slot) { slot.textContent = ''; return slot; }
     return document.querySelector('main') || document.body;
   }
 
@@ -108,10 +114,27 @@
     label.textContent = 'Embed with Spotter';
     btn.innerHTML = SPARKLE_SVG;
     btn.appendChild(label);
+    // The slot's own markup, so removing the report can put it back.
+    const slot = document.querySelector('[data-spotter-embed-here]');
+    const placeholder = slot ? slot.innerHTML : null;
+
+    const setLabel = (embedded) => {
+      label.textContent = embedded ? 'Remove report' : 'Embed with Spotter';
+      btn.title = embedded
+        ? 'Take the embedded report back out of this page'
+        : 'Embed this Power BI report, with Spotter and Liveboard on it';
+    };
+
     btn.addEventListener('click', () => {
       const open = document.querySelector('.' + PANEL_CLASS);
-      if (open) { open.remove(); return; }
-      if (!embed(report)) console.error('[Spotter Embed] not a Power BI report URL:', report);
+      if (open) {
+        open.remove();
+        if (slot && placeholder !== null) slot.innerHTML = placeholder;
+        setLabel(false);
+        return;
+      }
+      if (embed(report)) setLabel(true);
+      else console.error('[Spotter Embed] not a Power BI report URL:', report);
     });
     return btn;
   }

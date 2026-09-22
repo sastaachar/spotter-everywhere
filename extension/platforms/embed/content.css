@@ -78,3 +78,24 @@
   height: 680px;
   border: 0;
 }
+
+/* Filling a slot the page set aside: take its whole height rather than a fixed
+   one, so the report sits in the space the page designed for it. */
+[data-spotter-embed-here] > .ts-embed-panel {
+  margin: 0;
+  /* The slot is usually a flex container, and a flex item sizes to its content
+     unless told otherwise — which left the report in a column down one side of
+     the space the page had set aside for it. */
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  align-self: stretch;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+[data-spotter-embed-here] > .ts-embed-panel iframe {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 560px;
+}
