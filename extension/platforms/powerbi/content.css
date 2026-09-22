@@ -206,3 +206,98 @@
 .ts-spotter-inpage-error { color: #a4262c; }
 .ts-spotter-embed-mount { flex: 1 1 auto; min-height: 0; }
 .ts-spotter-embed-mount iframe { width: 100%; height: 100%; border: 0; display: block; }
+
+/* Report-level Liveboard trigger: docked, not tied to a single visual. */
+.ts-spotter-liveboard-btn {
+  position: fixed; right: 18px; bottom: 18px; z-index: 2147483646;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 9px 14px !important; border: 1px solid #e0e0e0 !important; border-radius: 18px !important;
+  background: #ffffff !important; color: #252423 !important;
+  font: 600 13px/1 "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif !important;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.16); cursor: pointer;
+  /* Power BI's yellow, same accent the Spotter panel uses. */
+  border-bottom: 3px solid #f2c811 !important;
+}
+.ts-spotter-liveboard-btn:hover { background: #f3f2f1 !important; }
+.ts-spotter-liveboard-btn:disabled { opacity: 0.75; cursor: default; }
+.ts-spotter-liveboard-btn svg { width: 13px; height: 13px; fill: #f2c811; }
+
+/* Progress checklist inside the loading overlay (built in content.js). Each row
+   spins while active and shows a green check when done/reused. */
+.ts-spotter-steps {
+  width: 300px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  text-align: left;
+}
+.ts-spotter-steps-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin-bottom: 2px;
+}
+.ts-spotter-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #9aa3b2;
+  font-weight: 500;
+  transition: color 0.2s ease;
+}
+.ts-spotter-step-icon {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  box-sizing: border-box;
+  border: 2px solid #cbd2dd;
+  border-radius: 50%;
+  position: relative;
+}
+.ts-spotter-step-label { flex: 1; }
+.ts-spotter-step-detail { font-size: 12px; font-weight: 400; color: #9aa3b2; }
+
+.ts-spotter-step[data-state="active"] { color: #1a1a1a; }
+.ts-spotter-step[data-state="active"] .ts-spotter-step-icon {
+  border-color: #2f6fed;
+  border-top-color: transparent;
+  animation: ts-spotter-spin 0.7s linear infinite;
+}
+@keyframes ts-spotter-spin { to { transform: rotate(360deg); } }
+
+.ts-spotter-step[data-state="done"],
+.ts-spotter-step[data-state="skip"] { color: #1a1a1a; }
+.ts-spotter-step[data-state="done"] .ts-spotter-step-icon,
+.ts-spotter-step[data-state="skip"] .ts-spotter-step-icon {
+  background: #1a9d54;
+  border-color: #1a9d54;
+}
+.ts-spotter-step[data-state="done"] .ts-spotter-step-icon::after,
+.ts-spotter-step[data-state="skip"] .ts-spotter-step-icon::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 1px;
+  width: 4px;
+  height: 9px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.ts-spotter-step[data-state="error"] { color: #b3261e; }
+.ts-spotter-step[data-state="error"] .ts-spotter-step-icon {
+  background: #b3261e;
+  border-color: #b3261e;
+}
+
+/* The liveboard build runs for a minute, so its overlay is a centred card
+   rather than the thin strip the Spotter load uses. */
+.ts-spotter-loading.ts-spotter-frame {
+  position: fixed; top: 0; right: 0; width: 760px; max-width: 95vw; height: 100vh;
+  display: flex; align-items: center; justify-content: center;
+  background: #ffffff; border-left: 1px solid #e0e0e0;
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.10); z-index: 2147483646;
+  font: 13px/18px "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+}

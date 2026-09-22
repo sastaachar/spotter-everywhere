@@ -213,6 +213,104 @@
   // buttons in one fixed layer on <body> instead and track the titles' rects.
   const placed = new Map();
 
+  // Progress checklist shown while the liveboard builds — same shape as the
+  // Tableau one: each row spins while active and turns into a green check when
+  // it completes, so a 60-second build shows what it is doing.
+  const LIVEBOARD_STEPS = [
+    { key: 'check', label: 'Checking ThoughtSpot' },
+    { key: 'read', label: 'Reading the report' },
+    { key: 'build', label: 'Building the liveboard' },
+    { key: 'open', label: 'Opening the liveboard' },
+  ];
+
+  function buildChecklist(container, title) {
+    container.textContent = '';
+    const wrap = document.createElement('div');
+    wrap.className = 'ts-spotter-steps';
+    const heading = document.createElement('div');
+    heading.className = 'ts-spotter-steps-title';
+    heading.textContent = title;
+    wrap.appendChild(heading);
+    const rows = {};
+    LIVEBOARD_STEPS.forEach((step) => {
+      const row = document.createElement('div');
+      row.className = 'ts-spotter-step';
+      row.dataset.state = 'pending';
+      const icon = document.createElement('span');
+      icon.className = 'ts-spotter-step-icon';
+      const label = document.createElement('span');
+      label.className = 'ts-spotter-step-label';
+      label.textContent = step.label;
+      const detail = document.createElement('span');
+      detail.className = 'ts-spotter-step-detail';
+      row.append(icon, label, detail);
+      wrap.appendChild(row);
+      rows[step.key] = { row, detail };
+    });
+    container.appendChild(wrap);
+    // state: pending | active | done | error
+    return (key, state, detailText) => {
+      const r = rows[key];
+      if (!r) return;
+      r.row.dataset.state = state;
+      if (detailText != null) r.detail.textContent = detailText;
+    };
+  }
+
+  // A liveboard covers the whole report, so its trigger belongs to the report
+  // rather than to any one visual — a single docked button, not one per title.
+  const REPORT_BUTTON_CLASS = 'ts-spotter-liveboard-btn';
+
+  function ensureLiveboardButton() {
+    if (document.querySelector('.' + REPORT_BUTTON_CLASS)) return;
+    const context = reportContext();
+    if (!context.reportId) return;
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = REPORT_BUTTON_CLASS;
+    btn.title = 'Build a ThoughtSpot Liveboard from every visual on this page';
+    const label = document.createElement('span');
+    label.textContent = 'Liveboard';
+    btn.innerHTML = SPARKLE_SVG;
+    btn.appendChild(label);
+
+    btn.addEventListener('click', async () => {
+      if (btn.disabled) return;
+      btn.disabled = true;
+
+      closePanel();
+      const overlay = document.createElement('aside');
+      overlay.className = FRAME_CLASS + ' ts-spotter-loading';
+      document.body.appendChild(overlay);
+      const setStep = buildChecklist(overlay, 'Building your Liveboard');
+
+      try {
+        const liveboardId = await buildLiveboard(reportContext(), setStep);
+        setStep('open', 'active');
+        overlay.remove();
+        btn.disabled = false;
+        openSpotter({ ...reportContext(), liveboardId });
+      } catch (err) {
+        setStep('build', 'error', err.message.slice(0, 80));
+        // Leave the failure on screen long enough to read, then clear it.
+        setTimeout(() => { overlay.remove(); btn.disabled = false; }, 8000);
+      }
+    });
+    document.body.appendChild(btn);
+  }
+
+  /** Report-level context: the page, not any single visual. */
+  function reportContext() {
+    const pathMatch = location.pathname.match(REPORT_PATH_PATTERN) || [];
+    return {
+      workspace: pathMatch[1] ? decodeURIComponent(pathMatch[1]) : null,
+      reportId: pathMatch[2] || null,
+      pageName: pathMatch[3] ? decodeURIComponent(pathMatch[3]) : null,
+      reportTitle: reportTitleFromDocument(),
+    };
+  }
+
   function ensureLayer() {
     let layer = document.querySelector('.' + LAYER_CLASS);
     if (!layer) {
@@ -492,14 +590,14 @@
       const ctx = vizContext(titleEl, title);
       if (!ctx.visualId || seen.has(ctx.visualId)) return;
       seen.add(ctx.visualId);
-      visuals.push({ visualId: ctx.visualId, title: title || ctx.visualId });
+      visuals.push({ visualId: ctx.visualId, title: title || ctx.visualId, visualType: ctx.visualType });
     });
     if (!visuals.length) throw new Error('no visuals with an id on this page');
 
     const datasets = [];
     for (let i = 0; i < visuals.length; i += 1) {
       const v = visuals[i];
-      note('Reading ' + (i + 1) + ' of ' + visuals.length + ': ' + v.title + '\u2026');
+      note((i + 1) + ' of ' + visuals.length + ': ' + v.title);
       let result;
       try {
         result = await requestData(v.visualId, 'summary', MAX_LOAD_ROWS);
@@ -512,6 +610,8 @@
       if (!result.columns || !result.columns.length || !rows.length) continue;
       datasets.push({
         title: v.title,
+        // Lets the liveboard draw each tile the way the source visual is drawn.
+        visualType: v.visualType || undefined,
         columns: result.columns.map((c) => ({ name: c.name })),
         rows: rows.map((row) => row.map(loadableValue)),
       });
@@ -520,24 +620,33 @@
     return datasets;
   }
 
-  async function buildLiveboard(context, note) {
+  async function buildLiveboard(context, setStep) {
     const guid = context.reportId;
     if (!guid) throw new Error('no report id for this view');
 
-    note('Checking for an existing liveboard\u2026');
+    setStep('check', 'active');
     const found = await ask(GET_LIVEBOARD, { platform: PLATFORM, guid });
-    if (found.body && found.body.exists && found.body.liveboardId) return found.body.liveboardId;
+    if (found.body && found.body.exists && found.body.liveboardId) {
+      setStep('check', 'done', 'already built');
+      setStep('read', 'done', 'reused');
+      setStep('build', 'done', 'reused');
+      return found.body.liveboardId;
+    }
+    setStep('check', 'done', 'not built yet');
 
     // The liveboard mirrors the report, so it is built from every visual's real
     // rows — one tile per visual. The semantic model alone would describe the
     // columns but carry no data, and every tile would read "No data found".
-    const datasets = await reportDatasets(note);
+    setStep('read', 'active');
+    const datasets = await reportDatasets((detail) => setStep('read', 'active', detail));
+    setStep('read', 'done', datasets.length + ' visuals');
 
-    note('Building the liveboard from ' + datasets.length + ' visuals\u2026');
+    setStep('build', 'active', 'loading ' + datasets.length + ' datasets');
     const built = await ask(CREATE_LIVEBOARD, {
       platform: PLATFORM, guid, name: context.reportTitle || undefined, datasets,
     });
     const body = built.body || {};
+    if (body.liveboardId) setStep('build', 'done');
     if (!body.liveboardId) {
       const failed = (body.stages || []).find((st) => st.status === 'failed');
       throw new Error(failed ? failed.stage + ': ' + (failed.detail || 'failed') : 'no liveboard id returned');
@@ -586,7 +695,9 @@
     go.addEventListener('click', async () => {
       go.disabled = true;
       try {
-        const liveboardId = await buildLiveboard(context, say);
+        const liveboardId = await buildLiveboard(context, (key, state, detail) => {
+          say(detail ? key + ': ' + detail : key);
+        });
         say('Liveboard ready');
         openSpotter({ ...context, liveboardId });
       } catch (err) {
@@ -743,6 +854,7 @@
       scanTimer = null;
       const before = placed.size;
       sync();
+      ensureLiveboardButton();
       if (placed.size !== before) matchLayout();
       if (placed.size) everInjected = true;
     }, SCAN_DEBOUNCE_MS);
