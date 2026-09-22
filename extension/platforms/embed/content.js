@@ -90,7 +90,7 @@
     close.className = 'ts-embed-close';
     close.setAttribute('aria-label', 'Remove the embedded report');
     close.textContent = '×';
-    close.addEventListener('click', () => panel.remove());
+    close.addEventListener('click', () => { panel.remove(); onRemoved(); });
     head.append(title, note, close);
 
     const frame = document.createElement('iframe');
@@ -118,22 +118,19 @@
     const slot = document.querySelector('[data-spotter-embed-here]');
     const placeholder = slot ? slot.innerHTML : null;
 
-    const setLabel = (embedded) => {
-      label.textContent = embedded ? 'Remove report' : 'Embed with Spotter';
-      btn.title = embedded
-        ? 'Take the embedded report back out of this page'
-        : 'Embed this Power BI report, with Spotter and Liveboard on it';
+    // While a report is embedded this button steps aside. Power BI docks its own
+    // Liveboard control to the bottom-right of the frame, and a button fixed to
+    // the bottom-right of the page lands squarely on top of it — the report's
+    // own control was there all along, underneath this one. The panel's close
+    // control takes over until the report is gone.
+    const removed = () => {
+      if (slot && placeholder !== null) slot.innerHTML = placeholder;
+      btn.hidden = false;
     };
 
     btn.addEventListener('click', () => {
-      const open = document.querySelector('.' + PANEL_CLASS);
-      if (open) {
-        open.remove();
-        if (slot && placeholder !== null) slot.innerHTML = placeholder;
-        setLabel(false);
-        return;
-      }
-      if (embed(report)) setLabel(true);
+      if (document.querySelector('.' + PANEL_CLASS)) return;
+      if (embed(report, removed)) btn.hidden = true;
       else console.error('[Spotter Embed] not a Power BI report URL:', report);
     });
     return btn;
