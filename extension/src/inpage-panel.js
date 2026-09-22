@@ -103,8 +103,7 @@ export async function openSpotterPanel(context, hostClass) {
   const cfg = CONFIGS[platform];
 
   const host = document.createElement('aside');
-  host.className = (hostClass || '') + ' ts-spotter-inpage'
-    + (isLiveboard ? ' ts-spotter-inpage-wide' : '');
+  host.className = (hostClass || '') + ' ts-spotter-inpage';
   // Same palette the embed is themed with, so our chrome and Spotter's UI are
   // one surface rather than two. Single source: ui/configs/<platform>-config.js.
   const c = cfg.colors;
@@ -114,9 +113,17 @@ export async function openSpotterPanel(context, hostClass) {
   host.style.setProperty('--ts-panel-muted', c.textSecondary);
   host.style.setProperty('--ts-panel-accent', c.primary);
   host.style.setProperty('--ts-panel-font', c.font);
-  host.innerHTML = '<header class="ts-spotter-inpage-head"><strong>' + noun + '</strong>'
+  host.innerHTML = '<div class="ts-spotter-inpage-grip" role="separator" aria-orientation="vertical"'
+    + ' aria-label="Resize panel" tabindex="0"></div>'
+    + '<header class="ts-spotter-inpage-head">'
+    + '<div class="ts-spotter-inpage-titles">'
+    + '<strong class="ts-spotter-inpage-title">' + noun + '</strong>'
     + '<span class="ts-spotter-inpage-subject"></span>'
-    + '<button type="button" class="ts-spotter-inpage-close" aria-label="Close ' + noun + '">&times;</button></header>'
+    + '</div>'
+    + '<div class="ts-spotter-inpage-actions">'
+    + '<button type="button" class="ts-spotter-inpage-btn ts-spotter-inpage-widen" aria-label="Toggle panel width" title="Toggle width"></button>'
+    + '<button type="button" class="ts-spotter-inpage-btn ts-spotter-inpage-close" aria-label="Close ' + noun + '" title="Close">&times;</button>'
+    + '</div></header>'
     + '<div class="ts-spotter-inpage-status" hidden></div>'
     + '<div class="ts-spotter-inpage-progress"></div>'
     + '<div class="ts-spotter-embed-mount"></div>';
@@ -130,6 +137,57 @@ export async function openSpotterPanel(context, hostClass) {
     statusEl.hidden = !text;
   };
   host.querySelector('.ts-spotter-inpage-close').addEventListener('click', closeSpotterPanel);
+
+  // The panel covers the report, so it has to be adjustable: drag the left edge,
+  // or toggle between a reading width and a wide one. The choice is remembered
+  // per platform so it survives reopening.
+  const WIDTH_KEY = 'ts-spotter-panel-width-' + platform;
+  const MIN_WIDTH = 380;
+  const applyWidth = (px) => {
+    const max = Math.round(window.innerWidth * 0.96);
+    const width = Math.min(Math.max(Math.round(px), MIN_WIDTH), max);
+    host.style.width = width + 'px';
+    try { localStorage.setItem(WIDTH_KEY, String(width)); } catch { /* private window */ }
+    return width;
+  };
+
+  let stored = null;
+  try { stored = Number(localStorage.getItem(WIDTH_KEY)) || null; } catch { stored = null; }
+  applyWidth(stored || (isLiveboard ? 1180 : 760));
+
+  const grip = host.querySelector('.ts-spotter-inpage-grip');
+  let dragging = false;
+  grip.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    grip.setPointerCapture(e.pointerId);
+    host.classList.add('ts-spotter-inpage-dragging');
+    e.preventDefault();
+  });
+  grip.addEventListener('pointermove', (e) => {
+    // The panel is docked right, so its width is whatever is left of the pointer.
+    if (dragging) applyWidth(window.innerWidth - e.clientX);
+  });
+  const endDrag = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    try { grip.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+    host.classList.remove('ts-spotter-inpage-dragging');
+  };
+  grip.addEventListener('pointerup', endDrag);
+  grip.addEventListener('pointercancel', endDrag);
+  // Keyboard equivalent, since a drag handle alone is not reachable.
+  grip.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft') applyWidth(host.getBoundingClientRect().width + 60);
+    else if (e.key === 'ArrowRight') applyWidth(host.getBoundingClientRect().width - 60);
+    else return;
+    e.preventDefault();
+  });
+
+  host.querySelector('.ts-spotter-inpage-widen').addEventListener('click', () => {
+    const wide = Math.round(window.innerWidth * 0.96);
+    const current = host.getBoundingClientRect().width;
+    applyWidth(current > wide - 40 ? 760 : wide);
+  });
 
   const bits = (SUBJECT[platform](context) || []).filter(Boolean);
   if (context.worksheetName) bits.push('model: ' + context.worksheetName);

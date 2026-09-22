@@ -174,37 +174,64 @@
 /* In-page Spotter panel (src/inpage-panel.js). Colours come from
    ui/configs/power-bi-config.js via inline custom properties, so the panel
    chrome matches the Power BI palette the embed itself is themed with. */
-.ts-spotter-inpage-wide { width: 1180px !important; max-width: 96vw !important; }
-
 .ts-spotter-inpage {
-  position: fixed; top: 0; right: 0; width: 760px; max-width: 95vw; height: 100vh;
+  position: fixed; top: 0; right: 0; height: 100vh;
+  width: 760px; max-width: 96vw;
   display: flex; flex-direction: column; box-sizing: border-box;
   background: var(--ts-panel-bg, #fff);
   color: var(--ts-panel-text, #252423);
   border-left: 1px solid rgba(0, 0, 0, 0.08);
-  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.10);
+  box-shadow: -8px 0 28px rgba(0, 0, 0, 0.12);
   z-index: 2147483647;
   font: 13px/18px var(--ts-panel-font, "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif);
 }
+/* Dragging must not be fought by a width transition, and the iframe must not
+   swallow the pointer once it leaves the grip. */
+.ts-spotter-inpage-dragging { user-select: none; }
+.ts-spotter-inpage-dragging iframe { pointer-events: none; }
+
+/* Drag the left edge to resize; the report behind stays usable. */
+.ts-spotter-inpage-grip {
+  position: absolute; left: -3px; top: 0; width: 8px; height: 100%;
+  cursor: col-resize; z-index: 1;
+}
+.ts-spotter-inpage-grip::after {
+  content: ""; position: absolute; left: 3px; top: 50%; width: 2px; height: 42px;
+  transform: translateY(-50%); border-radius: 2px;
+  background: rgba(0, 0, 0, 0.16); opacity: 0; transition: opacity 0.15s ease;
+}
+.ts-spotter-inpage-grip:hover::after,
+.ts-spotter-inpage-grip:focus-visible::after,
+.ts-spotter-inpage-dragging .ts-spotter-inpage-grip::after { opacity: 1; }
+.ts-spotter-inpage-grip:focus-visible { outline: 2px solid var(--ts-panel-accent, #f2c811); outline-offset: -2px; }
+
 .ts-spotter-inpage-head {
-  display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  display: flex; align-items: center; gap: 12px; padding: 12px 16px 12px 18px;
   background: var(--ts-panel-surface, #f3f2f1);
   border-bottom: 1px solid rgba(0, 0, 0, 0.08);
-  /* Power BI's yellow reads as the product accent without shouting. */
   box-shadow: inset 0 3px 0 0 var(--ts-panel-accent, #f2c811);
   flex: 0 0 auto;
 }
-.ts-spotter-inpage-head strong { font-size: 14px; font-weight: 600; }
+/* Title over subtitle, so a long model name wraps out of the way instead of
+   pushing the controls off the edge. */
+.ts-spotter-inpage-titles { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.ts-spotter-inpage-title { font-size: 14px; font-weight: 650; letter-spacing: -0.01em; }
 .ts-spotter-inpage-subject {
-  color: var(--ts-panel-muted, #605e5c);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+  color: var(--ts-panel-muted, #605e5c); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.ts-spotter-inpage-close {
-  all: unset; cursor: pointer; font-size: 18px; line-height: 1;
-  color: var(--ts-panel-muted, #605e5c); padding: 2px 8px; border-radius: 2px;
+.ts-spotter-inpage-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.ts-spotter-inpage-btn {
+  all: unset; cursor: pointer; display: grid; place-items: center;
+  width: 28px; height: 28px; border-radius: 6px;
+  color: var(--ts-panel-muted, #605e5c); font-size: 17px; line-height: 1;
 }
-.ts-spotter-inpage-close:hover { background: rgba(0, 0, 0, 0.06); }
-.ts-spotter-inpage-status { padding: 10px 14px; color: var(--ts-panel-muted, #605e5c); flex: 0 0 auto; }
+.ts-spotter-inpage-btn:hover { background: rgba(0, 0, 0, 0.06); color: var(--ts-panel-text, #252423); }
+.ts-spotter-inpage-btn:focus-visible { outline: 2px solid var(--ts-panel-accent, #f2c811); outline-offset: -2px; }
+/* Two arrows facing out: widen / restore. */
+.ts-spotter-inpage-widen::before { content: "\21C4"; font-size: 15px; }
+
+.ts-spotter-inpage-status { padding: 10px 16px; color: var(--ts-panel-muted, #605e5c); flex: 0 0 auto; }
 .ts-spotter-inpage-error { color: #a4262c; }
 .ts-spotter-inpage-progress { padding: 22px 26px; flex: 0 0 auto; }
 .ts-spotter-embed-mount { flex: 1 1 auto; min-height: 0; }
