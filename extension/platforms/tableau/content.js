@@ -125,7 +125,7 @@
     btn.className = LB_BUTTON_CLASS;
     btn.title = 'Replace this Tableau view with a ThoughtSpot Liveboard';
     btn.setAttribute('aria-label', 'Open as Liveboard');
-    btn.innerHTML = '<span>◧ Liveboard</span>';
+    btn.innerHTML = SPARKLE_SVG + '<span>Liveboard</span>';
     btn.addEventListener('click', (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
