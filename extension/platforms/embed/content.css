@@ -1,0 +1,80 @@
+/* The embed button on a customer's own page. Docked like the Liveboard button
+   the BI tools get, so the extension reads as one product wherever it turns up,
+   and quiet enough to sit on somebody else's design. */
+.ts-embed-btn {
+  all: initial;
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 2147483646;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  padding: 9px 14px;
+  border: 1px solid #e0e0e0;
+  border-bottom: 3px solid #f2c811;
+  border-radius: 18px;
+  background: #ffffff;
+  color: #1a1a1a;
+  font: 600 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.16);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.ts-embed-btn svg { width: 13px; height: 13px; fill: #f2c811; }
+.ts-embed-btn:hover { background: #f8f8f8; }
+.ts-embed-btn:focus-visible { outline: 2px solid #f2c811; outline-offset: 2px; }
+
+/* The report, placed in the page's own flow rather than floated over it — the
+   point is that it belongs to the page now. */
+.ts-embed-panel {
+  all: initial;
+  display: block;
+  box-sizing: border-box;
+  margin: 20px 0;
+  border: 1px solid #e6e6e6;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+.ts-embed-panel > header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  background: #faf9f8;
+  border-bottom: 1px solid #ededed;
+  box-shadow: inset 0 3px 0 0 #f2c811;
+}
+.ts-embed-panel > header strong { font-size: 13px; font-weight: 650; color: #1a1a1a; }
+.ts-embed-panel > header span {
+  flex: 1;
+  color: #605e5c;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ts-embed-close {
+  all: unset;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 18px;
+  line-height: 1;
+  color: #605e5c;
+}
+.ts-embed-close:hover { background: rgba(0, 0, 0, 0.06); color: #1a1a1a; }
+
+.ts-embed-panel iframe {
+  display: block;
+  width: 100%;
+  /* Tall enough that the report lays out the way it does in Power BI; below
+     roughly this the canvas drops to its small-screen arrangement. */
+  height: 680px;
+  border: 0;
+}

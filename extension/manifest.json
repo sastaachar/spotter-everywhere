@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Spotter Everywhere",
   "version": "0.1.0",
-  "description": "Adds a ThoughtSpot Spotter button to Tableau and Power BI, picking the right code for the site it loads on.",
+  "description": "Adds a ThoughtSpot Spotter button to Tableau and Power BI, and lets any page embed a Power BI report with Spotter on it.",
   "permissions": [
     "storage"
   ],
@@ -81,6 +81,20 @@
       "run_at": "document_start",
       "all_frames": true,
       "world": "MAIN"
+    },
+    {
+      "matches": [
+        "http://localhost/*",
+        "http://127.0.0.1/*",
+        "https://localhost/*"
+      ],
+      "js": [
+        "platforms/embed/content.js"
+      ],
+      "css": [
+        "platforms/embed/content.css"
+      ],
+      "run_at": "document_idle"
     }
   ]
 }

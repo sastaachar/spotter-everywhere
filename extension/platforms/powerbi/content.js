@@ -104,13 +104,35 @@
     return r.width > 0 && r.height > 0 ? { x: r.left, y: r.top, w: r.width, h: r.height } : null;
   }
 
-  // The open report page. Power BI puts the section id in the URL and updates it
-  // on every page switch, including the in-canvas navigation buttons a report
-  // builds its own tab strip from — so this follows the user, it is not the page
-  // the report happened to open on.
+  /**
+   * Which report, and which of its pages, this frame is showing.
+   *
+   * The Power BI app puts both in the path — /groups/<ws>/reports/<id>/<page> —
+   * and updates it on every page switch, including the in-canvas buttons a
+   * report builds its own tab strip from, so it follows the user. An embedded
+   * report is served from /reportEmbed and carries the same three in the query
+   * instead; without reading those, a report embedded in someone else's page
+   * has no id, and the Liveboard button never appears on it.
+   */
+  function reportIdentity() {
+    const path = location.pathname.match(REPORT_PATH_PATTERN);
+    if (path) {
+      return {
+        workspace: path[1] ? decodeURIComponent(path[1]) : null,
+        reportId: path[2] || null,
+        pageName: path[3] ? decodeURIComponent(path[3]) : null,
+      };
+    }
+    const q = new URLSearchParams(location.search);
+    return {
+      workspace: q.get('groupId'),
+      reportId: q.get('reportId'),
+      pageName: q.get('pageName'),
+    };
+  }
+
   function currentPageName() {
-    const fromUrl = (location.pathname.match(REPORT_PATH_PATTERN) || [])[3];
-    return fromUrl ? decodeURIComponent(fromUrl) : null;
+    return reportIdentity().pageName;
   }
 
   /** The open page's own display name, e.g. "Pipeline Trends". */
@@ -238,15 +260,15 @@
   }
 
   function vizContext(titleEl, visualTitle) {
-    const pathMatch = location.pathname.match(REPORT_PATH_PATTERN) || [];
+    const identity = reportIdentity();
     const transform = titleEl.closest(TRANSFORM_SELECTOR);
     const container = titleEl.closest(VISUAL_CONTAINER_SELECTOR);
     const translate = transform && (transform.getAttribute('style') || '').match(TRANSLATE_PATTERN);
     const layout = layoutFor(titleEl);
     return {
-      workspace: pathMatch[1] ? decodeURIComponent(pathMatch[1]) : null,
-      reportId: pathMatch[2] || null,
-      pageName: currentPageName(),
+      workspace: identity.workspace,
+      reportId: identity.reportId,
+      pageName: identity.pageName,
       reportTitle: reportTitleFromDocument(),
       visualTitle,
       // From the report layout when available: the DOM exposes no visual guid.
@@ -388,11 +410,11 @@
 
   /** Report-level context: the page, not any single visual. */
   function reportContext() {
-    const pathMatch = location.pathname.match(REPORT_PATH_PATTERN) || [];
+    const identity = reportIdentity();
     return {
-      workspace: pathMatch[1] ? decodeURIComponent(pathMatch[1]) : null,
-      reportId: pathMatch[2] || null,
-      pageName: currentPageName(),
+      workspace: identity.workspace,
+      reportId: identity.reportId,
+      pageName: identity.pageName,
       pageTitle: currentPageTitle(),
       reportTitle: reportTitleFromDocument(),
     };
