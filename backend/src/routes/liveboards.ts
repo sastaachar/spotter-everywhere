@@ -2,8 +2,9 @@ import type { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { extractTwbXml, parseTableauColumns, type Column } from '../tableau';
 import { parseTmdlColumns } from '../powerbi';
-import { generateTml, generateLiveboardTml } from '../tml';
-import { importTml, findGuid, importErrors, findMetadataId } from '../thoughtspot';
+import { generateTml, generateLiveboardTml, generateLiveboardOverSources } from '../tml';
+import type { LiveboardSource } from '../tml';
+import { importTml, findGuid, importErrors, findMetadataId, shareMetadata } from '../thoughtspot';
 import type { Deps } from '../deps';
 
 // Deterministic liveboard name from (platform, guid) alone, so /get-liveboard
@@ -187,6 +188,9 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
     let bytes: Uint8Array | null = null;
     let text = '';
     let dataInput: { columns: { name: string; type?: string; dataType?: string }[]; rows: unknown[][] } | null = null;
+    // One entry per source visual: the liveboard gets a tile per visual, each
+    // answering from a worksheet loaded with that visual's own rows.
+    let datasetsInput: { title: string; columns: { name: string }[]; rows: unknown[][] }[] = [];
     if (ct.includes('multipart/form-data')) {
       const form = await c.req.formData();
       platform = String(form.get('platform') ?? '');
@@ -209,6 +213,11 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
       if (typeof b.fileBase64 === 'string') bytes = Uint8Array.from(atob(b.fileBase64), (ch) => ch.charCodeAt(0));
       const d = b.data as { columns?: { name: string; type?: string; dataType?: string }[]; rows?: unknown[][] } | undefined;
       if (d && Array.isArray(d.columns) && Array.isArray(d.rows)) dataInput = { columns: d.columns, rows: d.rows };
+      if (Array.isArray(b.datasets)) {
+        datasetsInput = (b.datasets as { title?: string; name?: string; columns?: { name: string }[]; rows?: unknown[][] }[])
+          .filter((d2) => d2 && Array.isArray(d2.columns) && d2.columns.length && Array.isArray(d2.rows) && d2.rows.length)
+          .map((d2, i) => ({ title: String(d2.title ?? d2.name ?? `Source ${i + 1}`), columns: d2.columns!, rows: d2.rows! }));
+      }
     }
 
     platform = platform.toLowerCase();
@@ -245,6 +254,85 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
       stage('lookup', 'ok', 'not found');
     } else {
       stage('lookup', 'skipped', 'no cluster configured');
+    }
+
+
+    let liveboardId: string | undefined;
+
+    /** Share a liveboard with the privileged groups; without it the embed user
+     *  gets ThoughtSpot's "request access" page. loadDataset already shares the
+     *  worksheets underneath. Best effort — a share failure must not discard
+     *  the liveboard. */
+    const shareLiveboard = async (env: { host: string; token: string }, id: string) => {
+      const groups = options.tsUserGroups ?? [];
+      if (!groups.length) return stage('share', 'skipped', 'TS_USER_GROUPS not set');
+      try {
+        await shareMetadata(
+          env, [id],
+          groups.map((g) => ({ identifier: g, type: 'USER_GROUP' as const })), 'READ_ONLY', 'LIVEBOARD',
+        );
+        stage('share', 'ok');
+      } catch (e) {
+        stage('share', 'failed', (e as Error).message);
+      }
+    };
+
+    // Report path: each source visual's rows become their own worksheet and the
+    // liveboard gets one tile per source — the report's real data, not a
+    // schema-only shell. Runs before the parse stage, which needs a model.
+    if (datasetsInput.length && tsEnv) {
+      const sources: LiveboardSource[] = [];
+      const loaded: { title: string; worksheetId: string }[] = [];
+      for (const [i, ds] of datasetsInput.entries()) {
+        const wsName = `${name} · ${ds.title}`.slice(0, 80);
+        let ws;
+        try {
+          ws = await loadDataset(tsEnv, wsName, ds.columns, ds.rows);
+        } catch (e) {
+          stage(`load-data[${i + 1}]`, 'failed', `${ds.title}: ${(e as Error).message}`);
+          continue;
+        }
+        if (!ws.worksheetId || !ws.loaded) {
+          stage(`load-data[${i + 1}]`, 'failed', `${ds.title}: ${(ws.messages || []).join('; ') || 'no worksheet after load'}`);
+          continue;
+        }
+        stage(`load-data[${i + 1}]`, 'ok', `${ds.title}: ${ds.rows.length} rows`);
+        loaded.push({ title: ds.title, worksheetId: ws.worksheetId });
+        // Type off the loaded rows so a tile charts what is actually numeric.
+        const numeric = ds.columns.map((_, ci) => ds.rows.some((r) => typeof r[ci] === 'number'));
+        sources.push({
+          title: ds.title,
+          worksheetName: ws.worksheetName,
+          columns: ds.columns.map((col, ci) => ({
+            id: `col_${ci}`,
+            name: col.name,
+            type: numeric[ci] ? 'MEASURE' : 'ATTRIBUTE',
+            dataType: numeric[ci] ? 'DOUBLE' : 'VARCHAR',
+          })),
+        });
+      }
+      if (!sources.length) {
+        return c.json({ platform, name, reused: false, error: 'data_load_failed', detail: 'no source loaded', stages }, 502);
+      }
+
+      const liveboardTml = generateLiveboardOverSources(name, sources);
+      stage('generate', 'ok', `${sources.length} tiles`);
+      try {
+        const result = await importTml(tsEnv, [liveboardTml]);
+        liveboardId = (await findMetadataId(tsEnv, name, 'LIVEBOARD')) ?? findGuid(result, name);
+        if (!liveboardId) {
+          const detail = importErrors(result).join(' | ') || 'no liveboard GUID in the import response';
+          stage('import', 'failed', detail);
+          return c.json({ platform, name, reused: false, error: 'import_failed', detail, stages }, 502);
+        }
+        stage('import', 'ok');
+        stage('locate', 'ok');
+      } catch (e) {
+        stage('import', 'failed', (e as Error).message);
+        return c.json({ platform, name, reused: false, error: 'cluster_error', detail: (e as Error).message, stages }, 502);
+      }
+      await shareLiveboard(tsEnv, liveboardId);
+      return c.json({ platform, name, reused: false, sources: loaded, liveboardId, liveboardUrl: pinboardUrl(liveboardId), stages }, 201);
     }
 
     // 2. parse/collect columns — from posted data (preferred: has rows) or the model.
@@ -284,7 +372,6 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
       stage('parse', 'ok', `${columns.length} columns (schema only, no data)`);
     }
 
-    let liveboardId: string | undefined;
 
     // Data path: load real rows via the CSV pipeline, then build the liveboard
     // on that populated worksheet.
