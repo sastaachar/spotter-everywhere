@@ -10,7 +10,9 @@
   const REQUEST = 'spotter:request';
   const RESPONSE = 'spotter:response';
   const LAYOUT = 'spotter:layout';
-  const EXPLORATION_PATTERN = /^(https:\/\/[^/]*analysis\.windows\.net)\/explore\/reports\/(\d+)\//;
+  // The report key is numeric in the Power BI app and the report guid when the
+  // report is embedded in someone else's page, so accept either.
+  const EXPLORATION_PATTERN = /^(https:\/\/[^/]*analysis\.windows\.net)\/explore\/reports\/([0-9a-f-]+)\//i;
   // A single window tops out at 20,000 rows server side; page below that and
   // follow RestartTokens for anything larger.
   const PAGE_SIZE = 10000;
@@ -96,12 +98,15 @@
     if (explorationPromise) return explorationPromise;
     const found = discover();
     if (!found) return Promise.reject(new Error('backend host not discovered yet'));
-    explorationPromise = fetch(`${found.base}/explore/reports/${found.reportKey}/exploration`, {
-      headers: { Authorization: 'Bearer ' + window.powerBIAccessToken },
-    }).then((r) => {
-      if (!r.ok) throw new Error('exploration ' + r.status);
-      return r.json();
-    });
+    // The app serves /exploration; an embedded report only serves
+    // /modelsAndExploration, which wraps the same document under `exploration`.
+    const auth = { headers: { Authorization: 'Bearer ' + window.powerBIAccessToken } };
+    const url = (path) => `${found.base}/explore/reports/${found.reportKey}/${path}`;
+    explorationPromise = fetch(url('exploration'), auth)
+      .then((r) => (r.ok ? r.json() : fetch(url('modelsAndExploration'), auth).then((r2) => {
+        if (!r2.ok) throw new Error('exploration ' + r.status + ' / modelsAndExploration ' + r2.status);
+        return r2.json().then((j) => j.exploration || j);
+      })));
     return explorationPromise;
   }
 
