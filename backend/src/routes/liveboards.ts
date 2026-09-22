@@ -193,7 +193,7 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
     let dataInput: { columns: { name: string; type?: string; dataType?: string }[]; rows: unknown[][] } | null = null;
     // One entry per source visual: the liveboard gets a tile per visual, each
     // answering from a worksheet loaded with that visual's own rows.
-    let datasetsInput: { title: string; visualType?: string; roles?: string[]; columns: { name: string }[]; rows: unknown[][] }[] = [];
+    let datasetsInput: { title: string; visualType?: string; roles?: string[]; page?: string; text?: string; columns: { name: string }[]; rows: unknown[][] }[] = [];
     if (ct.includes('multipart/form-data')) {
       const form = await c.req.formData();
       platform = String(form.get('platform') ?? '');
@@ -217,14 +217,20 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
       const d = b.data as { columns?: { name: string; type?: string; dataType?: string }[]; rows?: unknown[][] } | undefined;
       if (d && Array.isArray(d.columns) && Array.isArray(d.rows)) dataInput = { columns: d.columns, rows: d.rows };
       if (Array.isArray(b.datasets)) {
-        datasetsInput = (b.datasets as { title?: string; name?: string; visualType?: string; roles?: string[]; columns?: { name: string }[]; rows?: unknown[][] }[])
-          .filter((d2) => d2 && Array.isArray(d2.columns) && d2.columns.length && Array.isArray(d2.rows) && d2.rows.length)
+        datasetsInput = (b.datasets as { title?: string; name?: string; visualType?: string; roles?: string[]; page?: string; text?: string; columns?: { name: string }[]; rows?: unknown[][] }[])
+          // A note tile carries words and no rows, so it cannot be held to the
+          // same shape as a source that becomes a worksheet.
+          .filter((d2) => d2 && (typeof d2.text === 'string'
+            ? d2.text.trim().length > 0
+            : Array.isArray(d2.columns) && d2.columns.length && Array.isArray(d2.rows) && d2.rows.length))
           .map((d2, i) => ({
             title: String(d2.title ?? d2.name ?? `Source ${i + 1}`),
             visualType: d2.visualType ? String(d2.visualType) : undefined,
             roles: Array.isArray(d2.roles) ? d2.roles.map(String) : undefined,
-            columns: d2.columns!,
-            rows: d2.rows!,
+            page: d2.page ? String(d2.page) : undefined,
+            text: d2.text ? String(d2.text) : undefined,
+            columns: d2.columns ?? [],
+            rows: d2.rows ?? [],
           }));
       }
     }
@@ -242,8 +248,13 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
     const tsEnv = await adminEnv();
     const pinboardUrl = (id: string) => `${options.tsHost!.replace(/\/$/, '')}/#/pinboard/${id}`;
     const stages: { stage: string; status: 'ok' | 'skipped' | 'failed'; detail?: string }[] = [];
+    // Set while the datasets path runs inside a stream, so each stage reaches
+    // the client as it happens rather than only in the final response.
+    let emit: (e: Record<string, unknown>) => void = () => {};
     const stage = (s: string, status: 'ok' | 'skipped' | 'failed', detail?: string) => {
-      stages.push(detail ? { stage: s, status, detail } : { stage: s, status });
+      const event = detail ? { stage: s, status, detail } : { stage: s, status };
+      stages.push(event);
+      emit(event);
     };
 
     // 1. lookup — reuse an existing liveboard by name.
@@ -289,10 +300,23 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
     // Report path: each source visual's rows become their own worksheet and the
     // liveboard gets one tile per source — the report's real data, not a
     // schema-only shell. Runs before the parse stage, which needs a model.
-    if (datasetsInput.length && tsEnv) {
+    //
+    // A whole report is dozens of sources and takes minutes, so this has to be
+    // able to stream: without traffic the connection and the extension's MV3
+    // worker are both torn down long before the build finishes.
+    const buildFromDatasets = async (): Promise<{ status: 200 | 201 | 502; body: Record<string, unknown> }> => {
+      // Only ever called behind `datasetsInput.length && tsEnv`.
+      const env = tsEnv!;
       const sources: LiveboardSource[] = [];
       const loaded: { title: string; worksheetId: string }[] = [];
       for (const [i, ds] of datasetsInput.entries()) {
+        // A note tile is words, not rows: no worksheet, no upload, straight
+        // through to the liveboard.
+        if (ds.text) {
+          sources.push({ title: ds.title, page: ds.page, text: ds.text, worksheetName: '', columns: [] });
+          stage(`note[${i + 1}]`, 'ok', ds.title);
+          continue;
+        }
         // Names are capped at 80 characters, so two visuals whose titles share a
         // prefix — "Revenue won" and "Revenue Won and Revenue In Pipeline…" —
         // can truncate to near-identical worksheet names, and a tile then fails
@@ -310,7 +334,7 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
         const wsName = `${prefix} · ${shortTitle} ${suffix}`;
         let ws;
         try {
-          ws = await loadDataset(tsEnv, wsName, ds.columns, ds.rows);
+          ws = await loadDataset(env, wsName, ds.columns, ds.rows);
         } catch (e) {
           stage(`load-data[${i + 1}]`, 'failed', `${ds.title}: ${(e as Error).message}`);
           continue;
@@ -339,6 +363,7 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
           visualType: ds.visualType,
           roles: ds.roles,
           rowCount: ds.rows.length,
+          page: ds.page,
           worksheetName: ws.worksheetName,
           columns: ds.columns.map((col, ci) => ({
             id: `col_${ci}`,
@@ -349,27 +374,60 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
         });
       }
       if (!sources.length) {
-        return c.json({ platform, name, reused: false, error: 'data_load_failed', detail: 'no source loaded', stages }, 502);
+        return { status: 502, body: { platform, name, reused: false, error: 'data_load_failed', detail: 'no source loaded', stages } };
       }
 
       const liveboardTml = generateLiveboardOverSources(name, sources);
       stage('generate', 'ok', `${sources.length} tiles`);
       try {
-        const result = await importTml(tsEnv, [liveboardTml]);
-        liveboardId = (await findMetadataId(tsEnv, name, 'LIVEBOARD')) ?? findGuid(result, name);
+        const result = await importTml(env, [liveboardTml]);
+        liveboardId = (await findMetadataId(env, name, 'LIVEBOARD')) ?? findGuid(result, name);
         if (!liveboardId) {
           const detail = importErrors(result).join(' | ') || 'no liveboard GUID in the import response';
           stage('import', 'failed', detail);
-          return c.json({ platform, name, reused: false, error: 'import_failed', detail, stages }, 502);
+          return { status: 502, body: { platform, name, reused: false, error: 'import_failed', detail, stages } };
         }
         stage('import', 'ok');
         stage('locate', 'ok');
       } catch (e) {
         stage('import', 'failed', (e as Error).message);
-        return c.json({ platform, name, reused: false, error: 'cluster_error', detail: (e as Error).message, stages }, 502);
+        return { status: 502, body: { platform, name, reused: false, error: 'cluster_error', detail: (e as Error).message, stages } };
       }
-      await shareLiveboard(tsEnv, liveboardId);
-      return c.json({ platform, name, reused: false, sources: loaded, liveboardId, liveboardUrl: pinboardUrl(liveboardId), stages }, 201);
+      await shareLiveboard(env, liveboardId);
+      return { status: 201, body: { platform, name, reused: false, sources: loaded, liveboardId, liveboardUrl: pinboardUrl(liveboardId), stages } };
+    };
+
+    const wantsStream = c.req.query('stream') === '1'
+      || (c.req.header('accept') ?? '').includes('application/x-ndjson');
+
+    if (datasetsInput.length && tsEnv) {
+      if (!wantsStream) {
+        const r = await buildFromDatasets();
+        return c.json(r.body, r.status);
+      }
+      c.header('Content-Type', 'application/x-ndjson; charset=utf-8');
+      c.header('Cache-Control', 'no-store');
+      c.header('X-Accel-Buffering', 'no');
+      return stream(c, async (s2) => {
+        let chain: Promise<unknown> = Promise.resolve();
+        const write = (obj: Record<string, unknown>): Promise<unknown> => {
+          chain = chain.then(() => s2.write(JSON.stringify(obj) + '\n')).catch(() => {});
+          return chain;
+        };
+        emit = (e) => { void write(e); };
+        // Loading one source is silent for several seconds; a heartbeat keeps
+        // the connection and the extension's worker alive across the whole run.
+        const heartbeat = setInterval(() => { void write({ stage: 'heartbeat', status: 'active' }); }, 5000);
+        try {
+          const r = await buildFromDatasets();
+          await write({ stage: 'result', status: r.status, ...r.body });
+        } catch (e) {
+          await write({ stage: 'result', status: 500, error: 'internal_error', detail: (e as Error).message });
+        } finally {
+          clearInterval(heartbeat);
+          await chain;
+        }
+      });
     }
 
     // 2. parse/collect columns — from posted data (preferred: has rows) or the model.
@@ -428,8 +486,6 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
     const groups = options.tsUserGroups ?? [];
     const params = { platform, name, columns, rows, structure };
 
-    const wantsStream = c.req.query('stream') === '1'
-      || (c.req.header('accept') ?? '').includes('application/x-ndjson');
     if (wantsStream) {
       c.header('Content-Type', 'application/x-ndjson; charset=utf-8');
       c.header('Cache-Control', 'no-store');
