@@ -48,7 +48,14 @@ function formatLines(column: Column, indent: string): string[] {
   if (column.type !== 'MEASURE') return [];
   const { pattern, currency } = formatProperties(column.format);
   const lines: string[] = [];
-  if (pattern) lines.push(`${indent}format_pattern: "${pattern}"`);
+  // A percentage needs its pattern: without one a ratio shows as 0.54 rather
+  // than 54.2%, which is a different number to read.
+  //
+  // Money and counts do not. Given a pattern ThoughtSpot prints the figure in
+  // full — "US$11,429,826" — where left to itself it abbreviates to US$11.43M,
+  // which is what the report shows and what fits a card. So the currency is
+  // declared and the digits are left alone.
+  if (pattern && pattern.includes('%')) lines.push(`${indent}format_pattern: "${pattern}"`);
   if (currency) lines.push(`${indent}currency_type:`, `${indent}  iso_code: ${currency}`);
   return lines;
 }

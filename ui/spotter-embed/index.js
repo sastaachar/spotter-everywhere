@@ -61,7 +61,14 @@ export function customizationsFor(config, extra = {}) {
     ...extra,
     style: {
       ...style,
-      customCSS: { ...customCSS, variables: { ...cssVariablesFor(config), ...(customCSS.variables || {}) } },
+      customCSS: {
+        ...customCSS,
+        variables: { ...cssVariablesFor(config), ...(customCSS.variables || {}) },
+        // Rules reach what the variables do not — a headline figure's weight has
+        // no variable of its own. Undocumented selectors, so a rename costs the
+        // styling and nothing else.
+        rules_UNSTABLE: { ...(config.cssRules || {}), ...(customCSS.rules_UNSTABLE || {}) },
+      },
     },
   };
 }
