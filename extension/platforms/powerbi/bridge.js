@@ -131,6 +131,11 @@
           // The page's own display name ("Pipeline Trends"), so the liveboard
           // can be labelled with the page it mirrors rather than a section hash.
           sectionTitle: section.displayName || null,
+          // The page's design size. Visual coordinates are in these units, so
+          // this is what lets the content script place them on the rendered
+          // canvas without guessing the zoom factor.
+          sectionWidth: section.width || null,
+          sectionHeight: section.height || null,
           visualId: config.name || null,
           visualType: sv.visualType || null,
           title: literal(sv.vcObjects, 'title'),

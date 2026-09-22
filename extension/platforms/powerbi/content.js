@@ -94,14 +94,13 @@
     return title;
   }
 
-  function domRect(titleEl) {
-    const transform = titleEl.closest(TRANSFORM_SELECTOR);
-    const style = transform ? transform.getAttribute('style') || '' : '';
-    const tr = style.match(/translate\(([-\d.]+)px,\s*([-\d.]+)px\)/);
-    const w = style.match(/width:\s*([\d.]+)px/);
-    const h = style.match(/height:\s*([\d.]+)px/);
-    if (!tr || !w || !h) return null;
-    return { x: +tr[1], y: +tr[2], w: +w[1], h: +h[1] };
+  // Rendered geometry, in viewport pixels. Power BI's <transform> node is a
+  // zero-sized positioning shell on some pages, so its inline style cannot be
+  // trusted; the rendered container's own box always can.
+  function screenRect(node) {
+    if (!node) return null;
+    const r = node.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 ? { x: r.left, y: r.top, w: r.width, h: r.height } : null;
   }
 
   // The open report page. Power BI puts the section id in the URL and updates it
@@ -120,43 +119,104 @@
     return hit ? hit.sectionTitle : null;
   }
 
-  // The DOM lays the canvas out at a scale factor of the layout's coordinates,
-  // so titles match directly but geometry needs that factor recovered first.
+  // Every visual on the canvas, titled or not. The Spotter button hangs off a
+  // title, but a liveboard mirrors the whole page — and a Power BI title is
+  // optional, so walking titles silently dropped this report's detail tables and
+  // its Key influencers visual.
+  function canvasVisuals() {
+    return [...document.querySelectorAll(TRANSFORM_SELECTOR)]
+      .map((el) => {
+        const titleEl = el.querySelector(TITLE_SELECTOR);
+        const container = el.querySelector(VISUAL_CONTAINER_SELECTOR);
+        return {
+          el,
+          titleEl,
+          container,
+          title: titleEl ? titleOf(titleEl) : '',
+          rect: screenRect(container) || screenRect(el),
+        };
+      })
+      .filter((v) => v.rect);
+  }
+
+  /** The layout entry for any node inside a visual. */
+  function layoutFor(node) {
+    const transform = node && (node.matches(TRANSFORM_SELECTOR) ? node : node.closest(TRANSFORM_SELECTOR));
+    return transform ? matched.get(transform) || null : null;
+  }
+
+  // Where the report page is drawn inside the canvas element. A page has a
+  // design size (1280x720 say) and Power BI fits it into whatever room it has,
+  // either to the width or to the whole box, letterboxing the remainder. Both
+  // fits are offered because the report's display option is not worth trusting:
+  // matchLayout keeps whichever one actually lines the visuals up.
+  function pageFits(section) {
+    const canvas = document.querySelector(CANVAS_SELECTOR);
+    const box = canvas && canvas.getBoundingClientRect();
+    if (!box || !box.width || !section.w || !section.h) return [];
+    const place = (scale) => ({
+      scale,
+      x: box.left + Math.max(0, (box.width - section.w * scale) / 2),
+      y: box.top + Math.max(0, (box.height - section.h * scale) / 2),
+    });
+    return [
+      place(Math.min(box.width / section.w, box.height / section.h)),
+      place(box.width / section.w),
+    ];
+  }
+
   function matchLayout() {
     matched = new Map();
     if (!layoutVisuals.length) return;
     const pageName = currentPageName();
     const candidates = layoutVisuals.filter((v) => !pageName || v.section === pageName);
-    const targets = findTitleTargets(document).map((el) => ({ el, title: titleOf(el), rect: domRect(el) }));
+    if (!candidates.length) return;
+    const targets = canvasVisuals();
     const used = new Set();
 
+    // A title that is a literal in the layout is an exact identification, so it
+    // wins outright; geometry only settles what is left.
     targets.forEach((t) => {
-      const hit = candidates.find((v) => !used.has(v) && v.title && v.title.trim() === t.title);
+      const hit = t.title && candidates.find((v) => !used.has(v) && v.title && v.title.trim() === t.title);
       if (hit) { used.add(hit); matched.set(t.el, hit); }
     });
 
-    const ratios = [];
-    matched.forEach((v, el) => {
-      const r = domRect(el);
-      if (r && v.rect && v.rect.w) ratios.push(r.w / v.rect.w);
-    });
-    if (!ratios.length) return;
-    ratios.sort((a, b) => a - b);
-    const scale = ratios[Math.floor(ratios.length / 2)];
+    const section = { w: candidates[0].sectionWidth, h: candidates[0].sectionHeight };
+    const remaining = targets.filter((t) => !matched.has(t.el));
+    if (!remaining.length) return;
 
-    // Whatever is left over -- visuals whose title is not a literal in the
-    // layout -- is matched on geometry instead.
-    targets.filter((t) => !matched.has(t.el) && t.rect).forEach((t) => {
-      let best = null;
-      let bestDist = Infinity;
-      candidates.forEach((v) => {
-        if (used.has(v) || !v.rect) return;
-        const dist = Math.abs(t.rect.x - v.rect.x * scale) + Math.abs(t.rect.y - v.rect.y * scale)
-          + Math.abs(t.rect.w - v.rect.w * scale) + Math.abs(t.rect.h - v.rect.h * scale);
-        if (dist < bestDist) { bestDist = dist; best = v; }
+    // Score each fit by how well it places the visuals we have not identified,
+    // then keep the better one. A page carries hidden visuals from its bookmark
+    // states — far more than are on screen — so a tolerant threshold would hand
+    // a tile the wrong source; the bar is a fraction of the visual's own size.
+    let best = { pairs: [], score: Infinity };
+    pageFits(section).forEach((fit) => {
+      const taken = new Set(used);
+      const pairs = [];
+      let score = 0;
+      remaining.forEach((t) => {
+        let pick = null;
+        let pickDist = Infinity;
+        candidates.forEach((v) => {
+          if (taken.has(v) || !v.rect) return;
+          const dist = Math.abs(t.rect.x - (fit.x + v.rect.x * fit.scale))
+            + Math.abs(t.rect.y - (fit.y + v.rect.y * fit.scale))
+            + Math.abs(t.rect.w - v.rect.w * fit.scale)
+            + Math.abs(t.rect.h - v.rect.h * fit.scale);
+          if (dist < pickDist) { pickDist = dist; pick = v; }
+        });
+        if (pick && pickDist < 0.25 * (t.rect.w + t.rect.h)) {
+          taken.add(pick);
+          pairs.push([t.el, pick]);
+          score += pickDist;
+        }
       });
-      if (best && bestDist < 40) { used.add(best); matched.set(t.el, best); }
+      // More visuals placed beats a tighter fit on fewer of them.
+      const miss = remaining.length - pairs.length;
+      const total = miss * 1e6 + score;
+      if (total < best.score) best = { pairs, score: total };
     });
+    best.pairs.forEach(([el, v]) => matched.set(el, v));
   }
 
   const SPARKLE_SVG =
@@ -181,7 +241,7 @@
     const transform = titleEl.closest(TRANSFORM_SELECTOR);
     const container = titleEl.closest(VISUAL_CONTAINER_SELECTOR);
     const translate = transform && (transform.getAttribute('style') || '').match(TRANSLATE_PATTERN);
-    const layout = matched.get(titleEl) || null;
+    const layout = layoutFor(titleEl);
     return {
       workspace: pathMatch[1] ? decodeURIComponent(pathMatch[1]) : null,
       reportId: pathMatch[2] || null,
@@ -610,41 +670,62 @@
     'advancedSlicerVisual', 'qnaVisual',
   ]);
 
+  /** A name for a visual Power BI left untitled, from the data it is showing. */
+  function nameFromColumns(columns, fallback) {
+    const names = (columns || []).map((c) => c.name).filter(Boolean);
+    if (!names.length) return fallback;
+    if (names.length === 1) return names[0];
+    // Power BI titles its own visuals "<measure> by <category>", so a chart's
+    // two or three columns read that way too. A wide grid does not — calling an
+    // eleven-column detail table "Discount by Account Name" describes two of its
+    // columns and hides the other nine.
+    if (names.length <= 3) return names[names.length - 1] + ' by ' + names[0];
+    return names[0] + ' details';
+  }
+
   /** Every data visual on the open page, with the rows it is actually showing. */
   async function reportDatasets(note) {
     const seen = new Set();
     const visuals = [];
-    findTitleTargets(document).forEach((titleEl) => {
-      const title = titleOf(titleEl);
-      const ctx = vizContext(titleEl, title);
-      if (!ctx.visualId || seen.has(ctx.visualId)) return;
-      if (CHROME_VISUALS.has(ctx.visualType)) return;
-      seen.add(ctx.visualId);
+    canvasVisuals().forEach((cv) => {
+      const layout = matched.get(cv.el);
+      if (!layout || !layout.visualId || seen.has(layout.visualId)) return;
+      if (CHROME_VISUALS.has(layout.visualType)) return;
+      seen.add(layout.visualId);
       visuals.push({
-        visualId: ctx.visualId,
-        title: title || ctx.visualId,
-        visualType: ctx.visualType,
-        roles: ctx.roles ? Object.keys(ctx.roles) : null,
+        visualId: layout.visualId,
+        // A Power BI title is optional. Fall back to the name the report gives
+        // the visual internally, then to its own columns once the rows come
+        // back — anything but dropping it.
+        title: cv.title || (layout.title || '').trim(),
+        visualType: layout.visualType,
+        roles: layout.roles ? Object.keys(layout.roles) : null,
       });
     });
     if (!visuals.length) throw new Error('no data visuals on this page');
 
+    const skipped = [];
+
     const datasets = [];
     for (let i = 0; i < visuals.length; i += 1) {
       const v = visuals[i];
-      note((i + 1) + ' of ' + visuals.length + ': ' + v.title);
+      const label = v.title || v.visualType || 'visual ' + (i + 1);
+      note((i + 1) + ' of ' + visuals.length + ': ' + label);
       let result;
       try {
         result = await requestData(v.visualId, 'summary', MAX_LOAD_ROWS);
       } catch (err) {
-        // One unreadable visual should not cost the whole liveboard.
-        console.warn('[Power BI Spotter] skipping "' + v.title + '":', err.message);
+        // One unreadable visual should not cost the whole liveboard. Power BI's
+        // AI visuals (Key influencers, decomposition tree, Q&A) answer no data
+        // query at all, so this is where they drop out — named, not silently.
+        console.warn('[Power BI Spotter] skipping "' + label + '":', err.message);
+        skipped.push(label);
         continue;
       }
       const rows = result.rawRows || result.rows || [];
-      if (!result.columns || !result.columns.length || !rows.length) continue;
+      if (!result.columns || !result.columns.length || !rows.length) { skipped.push(label); continue; }
       datasets.push({
-        title: v.title,
+        title: v.title || nameFromColumns(result.columns, label),
         // Lets the liveboard draw each tile the way the source visual is drawn.
         visualType: v.visualType || undefined,
         // Visuals that share a type can still draw differently — a scatter with
@@ -655,6 +736,9 @@
       });
     }
     if (!datasets.length) throw new Error('none of the data visuals on this page returned rows');
+    // Surfaced by the caller, so a page that could not be mirrored in full says
+    // which visuals are missing instead of quietly building a shorter board.
+    datasets.skipped = skipped;
     return datasets;
   }
 
@@ -680,7 +764,10 @@
     // columns but carry no data, and every tile would read "No data found".
     setStep('read', 'active');
     const datasets = await reportDatasets((detail) => setStep('read', 'active', detail));
-    setStep('read', 'done', datasets.length + ' visuals');
+    const missed = datasets.skipped || [];
+    setStep('read', 'done', datasets.length + ' visuals'
+      + (missed.length ? ' (' + missed.length + ' with no queryable data)' : ''));
+    if (missed.length) console.warn('[Power BI Spotter] not on the liveboard:', missed.join(', '));
 
     setStep('build', 'active', 'loading ' + datasets.length + ' datasets');
     // No `name`: the route keys on it when present, while /get-liveboard keys on
@@ -885,11 +972,22 @@
   // Selectors are the part most likely to drift on a Power BI release, so
   // report what was actually on the page when nothing matched.
   function probe() {
+    const page = currentPageName();
+    const onPage = layoutVisuals.filter((v) => !page || v.section === page);
     console.log('[Power BI Spotter] titles:', document.querySelectorAll(TITLE_SELECTOR).length,
       '| transforms:', document.querySelectorAll(TRANSFORM_SELECTOR).length,
       '| buttons:', document.querySelectorAll('.' + BUTTON_CLASS).length);
-    const first = document.querySelector(TITLE_SELECTOR);
-    if (first) console.log('  first title markup:', first.outerHTML.slice(0, 400));
+    // Whether the canvas matched the report layout is what decides if a
+    // liveboard can be built at all, so it is the first thing to look at.
+    console.log('  page:', currentPageTitle() || page,
+      '| layout visuals here:', onPage.length,
+      '| matched:', matched.size, 'of', canvasVisuals().length, 'on canvas');
+    canvasVisuals().forEach((cv) => {
+      const hit = matched.get(cv.el);
+      console.log('   ', hit ? '✓' : '✗', JSON.stringify(cv.title || '(untitled)'),
+        hit ? hit.visualType : '—');
+    });
+    return { page, matched: matched.size, canvas: canvasVisuals().length, layout: onPage.length };
   }
   window.__spotterProbe = probe;
 
@@ -902,10 +1000,15 @@
       scanTimer = null;
       sync();
       ensureLiveboardButton();
-      // Re-match whenever what is on screen changes. Keying on the count alone
-      // missed a page switch between two pages that happen to hold the same
-      // number of visuals, which left every tile pointing at the old page.
-      const key = currentPageName() + '|' + [...placed.keys()].map(titleOf).join('\u0001');
+      // Re-match whenever what is on screen changes. Keying on the count of
+      // buttons alone missed two things: a page switch between two pages holding
+      // the same number of visuals, which left every tile pointing at the old
+      // page; and the moment a visual gains its geometry, since Power BI lays
+      // the canvas out at zero size until the tab is actually visible, and a
+      // match attempted before that has nothing to line up against.
+      const onCanvas = canvasVisuals();
+      const key = currentPageName() + '|' + onCanvas.length + '|'
+        + onCanvas.map((v) => v.title).join('\u0001');
       if (key !== lastMatchKey) { lastMatchKey = key; matchLayout(); }
       if (placed.size) everInjected = true;
     }, SCAN_DEBOUNCE_MS);
