@@ -222,9 +222,15 @@ const CHART_BY_VISUAL: Record<string, string> = {
   // Lines and areas
   lineChart: 'LINE', areaChart: 'AREA', stackedAreaChart: 'STACKED_AREA',
   hundredPercentStackedAreaChart: 'STACKED_AREA',
-  // Combos keep both halves: a line over columns, not just the line.
-  lineClusteredColumnComboChart: 'LINE_COLUMN',
-  lineStackedColumnComboChart: 'LINE_STACKED_COLUMN',
+  // Combos draw as the columns they are built on. The real thing needs its
+  // measures split between the column series and the line series, and that
+  // split lives in `custom_chart_config`, which addresses columns by the GUID
+  // ThoughtSpot assigns when the answer is created — a config written by name
+  // is rejected as an "Invalid GUID string", and without one the tile imports
+  // but fails to render at all ("There was an unknown failure"). The columns
+  // carry every measure and draw, which beats a tile that shows nothing.
+  lineClusteredColumnComboChart: 'COLUMN',
+  lineStackedColumnComboChart: 'STACKED_COLUMN',
   // Parts of a whole. DONUT is rejected on import, so a donut draws as a pie.
   pieChart: 'PIE', donutChart: 'PIE', treemap: 'TREEMAP', funnel: 'FUNNEL',
   waterfallChart: 'WATERFALL',

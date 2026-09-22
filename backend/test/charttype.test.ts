@@ -32,7 +32,10 @@ test('power bi ids: stacked is the plain id, clustered carries the word', () => 
   expect(one('clusteredColumnChart')).toBe('COLUMN');
   expect(one('pivotTable')).toBe('PIVOT_TABLE');
   expect(one('ribbonChart')).toBe('STACKED_COLUMN');
-  expect(one('lineStackedColumnComboChart')).toBe('LINE_STACKED_COLUMN');
+  // A combo needs a GUID-addressed custom_chart_config to split its series,
+  // which cannot be authored on a fresh import, so it draws as its columns.
+  expect(one('lineStackedColumnComboChart')).toBe('STACKED_COLUMN');
+  expect(one('lineClusteredColumnComboChart')).toBe('COLUMN');
 });
 test('a scatter that binds a size role is a bubble', () => {
   const cols = [col('A','ATTRIBUTE'), col('X','MEASURE','DOUBLE'), col('Y','MEASURE','DOUBLE')];
