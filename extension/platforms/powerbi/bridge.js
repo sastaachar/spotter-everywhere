@@ -128,6 +128,9 @@
         try { filters = JSON.parse(vc.filters || '[]') || []; } catch (e) { /* keep empty */ }
         out.push({
           section: section.name,
+          // The page's own display name ("Pipeline Trends"), so the liveboard
+          // can be labelled with the page it mirrors rather than a section hash.
+          sectionTitle: section.displayName || null,
           visualId: config.name || null,
           visualType: sv.visualType || null,
           title: literal(sv.vcObjects, 'title'),

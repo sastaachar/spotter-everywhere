@@ -18,7 +18,7 @@ const LIVEBOARDS = { tableau: TableauLiveboardEmbed, powerbi: PowerBiLiveboardEm
 const CONFIGS = { tableau: tableauConfig, powerbi: powerBiConfig };
 const SUBJECT = {
   tableau: (c) => [c.worksheet, c.dashboard || c.workbook],
-  powerbi: (c) => [c.visualTitle, c.reportTitle],
+  powerbi: (c) => [c.visualTitle || c.pageTitle, c.reportTitle],
 };
 
 // The worker holds the backend key and keeps the host_permissions CORS

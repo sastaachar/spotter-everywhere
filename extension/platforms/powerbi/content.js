@@ -104,12 +104,28 @@
     return { x: +tr[1], y: +tr[2], w: +w[1], h: +h[1] };
   }
 
+  // The open report page. Power BI puts the section id in the URL and updates it
+  // on every page switch, including the in-canvas navigation buttons a report
+  // builds its own tab strip from — so this follows the user, it is not the page
+  // the report happened to open on.
+  function currentPageName() {
+    const fromUrl = (location.pathname.match(REPORT_PATH_PATTERN) || [])[3];
+    return fromUrl ? decodeURIComponent(fromUrl) : null;
+  }
+
+  /** The open page's own display name, e.g. "Pipeline Trends". */
+  function currentPageTitle() {
+    const name = currentPageName();
+    const hit = name && layoutVisuals.find((v) => v.section === name && v.sectionTitle);
+    return hit ? hit.sectionTitle : null;
+  }
+
   // The DOM lays the canvas out at a scale factor of the layout's coordinates,
   // so titles match directly but geometry needs that factor recovered first.
   function matchLayout() {
     matched = new Map();
     if (!layoutVisuals.length) return;
-    const pageName = (location.pathname.match(REPORT_PATH_PATTERN) || [])[3] || null;
+    const pageName = currentPageName();
     const candidates = layoutVisuals.filter((v) => !pageName || v.section === pageName);
     const targets = findTitleTargets(document).map((el) => ({ el, title: titleOf(el), rect: domRect(el) }));
     const used = new Set();
@@ -169,7 +185,7 @@
     return {
       workspace: pathMatch[1] ? decodeURIComponent(pathMatch[1]) : null,
       reportId: pathMatch[2] || null,
-      pageName: pathMatch[3] ? decodeURIComponent(pathMatch[3]) : null,
+      pageName: currentPageName(),
       reportTitle: reportTitleFromDocument(),
       visualTitle,
       // From the report layout when available: the DOM exposes no visual guid.
@@ -312,7 +328,8 @@
     return {
       workspace: pathMatch[1] ? decodeURIComponent(pathMatch[1]) : null,
       reportId: pathMatch[2] || null,
-      pageName: pathMatch[3] ? decodeURIComponent(pathMatch[3]) : null,
+      pageName: currentPageName(),
+      pageTitle: currentPageTitle(),
       reportTitle: reportTitleFromDocument(),
     };
   }
@@ -397,7 +414,7 @@
   const PANEL_ROWS = [
     ['Report', (c) => c.reportTitle],
     ['Report id', (c) => c.reportId],
-    ['Page', (c) => c.pageName],
+    ['Page', (c) => c.pageTitle || c.pageName],
     ['Visual title', (c) => c.visualTitle],
     ['Visual id', (c) => c.visualId || (c.layoutError ? 'layout error: ' + c.layoutError : null)],
     ['Visual type', (c) => c.visualType],
@@ -585,9 +602,15 @@
     });
   }
 
-  // A liveboard covers the whole report, so it is keyed on the report id and
-  // built from the semantic model (TMDL) rather than one visual's rows.
-  /** Every visual on the current page, with the rows it is actually showing. */
+  // Report furniture, not data: text boxes, navigation buttons, decorative
+  // shapes and images, and slicers (a filter control, not a chart). Each one can
+  // carry a title, so title alone would turn a nav button into a liveboard tile.
+  const CHROME_VISUALS = new Set([
+    'textbox', 'actionButton', 'basicShape', 'shape', 'image', 'slicer',
+    'advancedSlicerVisual', 'qnaVisual',
+  ]);
+
+  /** Every data visual on the open page, with the rows it is actually showing. */
   async function reportDatasets(note) {
     const seen = new Set();
     const visuals = [];
@@ -595,10 +618,16 @@
       const title = titleOf(titleEl);
       const ctx = vizContext(titleEl, title);
       if (!ctx.visualId || seen.has(ctx.visualId)) return;
+      if (CHROME_VISUALS.has(ctx.visualType)) return;
       seen.add(ctx.visualId);
-      visuals.push({ visualId: ctx.visualId, title: title || ctx.visualId, visualType: ctx.visualType });
+      visuals.push({
+        visualId: ctx.visualId,
+        title: title || ctx.visualId,
+        visualType: ctx.visualType,
+        roles: ctx.roles ? Object.keys(ctx.roles) : null,
+      });
     });
-    if (!visuals.length) throw new Error('no visuals with an id on this page');
+    if (!visuals.length) throw new Error('no data visuals on this page');
 
     const datasets = [];
     for (let i = 0; i < visuals.length; i += 1) {
@@ -618,17 +647,23 @@
         title: v.title,
         // Lets the liveboard draw each tile the way the source visual is drawn.
         visualType: v.visualType || undefined,
+        // Visuals that share a type can still draw differently — a scatter with
+        // a Size role is a bubble chart — so the roles travel with the type.
+        roles: v.roles || undefined,
         columns: result.columns.map((c) => ({ name: c.name })),
         rows: rows.map((row) => row.map(loadableValue)),
       });
     }
-    if (!datasets.length) throw new Error('none of the visuals on this page returned rows');
+    if (!datasets.length) throw new Error('none of the data visuals on this page returned rows');
     return datasets;
   }
 
   async function buildLiveboard(context, setStep) {
-    const guid = context.reportId;
-    if (!guid) throw new Error('no report id for this view');
+    if (!context.reportId) throw new Error('no report id for this view');
+    // Keyed on the report AND the open page. Keyed on the report alone, the
+    // first page built won the cache and every other page reopened it — the
+    // tiles were read from whichever page happened to be open first.
+    const guid = context.pageName ? context.reportId + ':' + context.pageName : context.reportId;
 
     setStep('check', 'active');
     const found = await ask(GET_LIVEBOARD, { platform: PLATFORM, guid });
@@ -860,14 +895,18 @@
 
   let scanTimer = null;
   let everInjected = false;
+  let lastMatchKey = null;
   function scheduleScan() {
     if (scanTimer !== null) return;
     scanTimer = setTimeout(() => {
       scanTimer = null;
-      const before = placed.size;
       sync();
       ensureLiveboardButton();
-      if (placed.size !== before) matchLayout();
+      // Re-match whenever what is on screen changes. Keying on the count alone
+      // missed a page switch between two pages that happen to hold the same
+      // number of visuals, which left every tile pointing at the old page.
+      const key = currentPageName() + '|' + [...placed.keys()].map(titleOf).join('\u0001');
+      if (key !== lastMatchKey) { lastMatchKey = key; matchLayout(); }
       if (placed.size) everInjected = true;
     }, SCAN_DEBOUNCE_MS);
   }
