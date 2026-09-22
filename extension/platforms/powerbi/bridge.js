@@ -117,6 +117,18 @@
     return typeof value === 'string' ? value.replace(/^'|'$/g, '') : null;
   }
 
+  /** The words in a text box, as the report author typed them. */
+  function staticText(sv) {
+    const general = ((sv.objects || {}).general || [])[0];
+    const paragraphs = general && general.properties && general.properties.paragraphs;
+    if (!Array.isArray(paragraphs)) return null;
+    const text = paragraphs
+      .map((para) => (para.textRuns || []).map((run) => (typeof run.value === 'string' ? run.value : '')).join(''))
+      .join('\n')
+      .trim();
+    return text || null;
+  }
+
   function visuals(ex) {
     const out = [];
     (ex.sections || []).forEach((section) => {
@@ -147,6 +159,9 @@
           filterCount: filters.length,
           rect: { x: vc.x, y: vc.y, w: vc.width, h: vc.height },
           prototypeQuery: sv.prototypeQuery || null,
+          // A text box keeps its words here rather than in any query, so this
+          // is the only way to read them for a page that is not on screen.
+          text: staticText(sv),
         });
       });
     });
@@ -223,17 +238,37 @@
     return { columns, rows };
   }
 
+  /** The request the report itself would send for a visual, built from the
+   *  prototype query its definition carries. */
+  function synthesize(ex, target, visualId) {
+    if (!target || !target.prototypeQuery) return null;
+    return {
+      Query: { Commands: [{ SemanticQueryDataShapeCommand: { Query: target.prototypeQuery } }] },
+      QueryId: '',
+      ApplicationContext: {
+        DatasetId: ex.report.model.dbName,
+        Sources: [{ ReportId: ex.report.objectId, VisualId: visualId }],
+      },
+    };
+  }
+
   async function summary(visualId, options) {
     const maxRows = Math.min((options && options.maxRows) || PREVIEW_ROWS, MAX_ROWS);
     const ex = await exploration();
     const target = visuals(ex).find((v) => v.visualId === visualId);
+    // A visual only issues its query once it is on screen, and Power BI renders
+    // one page at a time — so a liveboard covering the whole report has to be
+    // able to ask for a page nobody has opened. Every visual carries the query
+    // the report would issue for it (`prototypeQuery`), and replaying that
+    // returns byte-identical results to intercepting the real request, verified
+    // across every visual on a page. Observed queries still win when present:
+    // they already carry any cross-filtering the user has applied.
     const captured = capturedByVisual.get(visualId);
-    if (!captured) {
-      throw new Error('no query captured for this visual yet - it may not have rendered, '
-        + 'or it draws no data (image, shape or textbox)');
+    const source = captured ? captured.query : synthesize(ex, target, visualId);
+    if (!source) {
+      throw new Error('this visual has no data query - it draws no data (image, shape or '
+        + 'text box), or it is an AI visual that answers no query at all');
     }
-
-    const source = captured.query;
     const query = source.Query.Commands[0].SemanticQueryDataShapeCommand.Query;
     const pageSize = Math.min(PAGE_SIZE, maxRows);
 
@@ -241,7 +276,7 @@
       const window = { Count: pageSize };
       if (restartTokens) window.RestartTokens = restartTokens;
       const body = {
-        ...captured.envelope,
+        ...(captured ? captured.envelope : { version: '1.0.0', modelId: ex.report.modelId }),
         queries: [{
           ...source,
           Query: { Commands: [{ SemanticQueryDataShapeCommand: {

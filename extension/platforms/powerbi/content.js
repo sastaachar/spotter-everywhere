@@ -23,6 +23,7 @@
   const CREATE_SESSION = 'spotter:create-session';
   const CREATE_DATASET = 'spotter:create-dataset';
   const CREATE_LIVEBOARD = 'spotter:create-liveboard';
+  const LIVEBOARD_STREAM = 'spotter:liveboard-stream';
   const GET_LIVEBOARD = 'spotter:get-liveboard';
   const PLATFORM = 'powerbi';
   const FRAME_CLASS = 'ts-spotter-frame';
@@ -651,6 +652,55 @@
     return context.workspace || 'powerbi_user';
   }
 
+  /**
+   * Run a build over a Port instead of a single sendMessage, resolving with the
+   * final result and calling onEvent for each stage the backend streams.
+   *
+   * A whole-report liveboard takes minutes, and a plain sendMessage cannot
+   * survive that: the MV3 service worker is torn down mid-request and the reply
+   * never arrives ("the message channel closed before a response was
+   * received"). Traffic on a Port keeps the worker alive, and the stages give
+   * the checklist something real to show meanwhile. Same shape as the Tableau
+   * side, which has always streamed.
+   */
+  function streamBuildPort(portName, payload, onEvent) {
+    return new Promise((resolve, reject) => {
+      let port;
+      try {
+        port = chrome.runtime.connect({ name: portName });
+      } catch (e) {
+        return reject(new Error('Extension worker unavailable — reload this page.'));
+      }
+      let result = null;
+      let settled = false;
+      const finish = (fn, arg) => {
+        if (settled) return;
+        settled = true;
+        try { port.disconnect(); } catch (e) { /* already gone */ }
+        fn(arg);
+      };
+      port.onMessage.addListener((msg) => {
+        if (!msg) return;
+        if (msg.error) return finish(reject, new Error(msg.error));
+        if (msg.stage === 'result') { result = msg; return; }
+        if (msg.done) {
+          if (result && (result.error || (typeof result.status === 'number' && result.status >= 400))) {
+            return finish(reject, new Error(result.detail || result.error || ('HTTP ' + result.status)));
+          }
+          return finish(resolve, result);
+        }
+        try { onEvent(msg); } catch (e) { /* a reporting slip must not fail the build */ }
+      });
+      port.onDisconnect.addListener(() => {
+        const err = chrome.runtime.lastError;
+        if (settled) return;
+        if (result) return finish(resolve, result);
+        finish(reject, new Error((err && err.message) || 'stream disconnected'));
+      });
+      try { port.postMessage({ payload }); } catch (e) { finish(reject, new Error('could not start the stream')); }
+    });
+  }
+
   function ask(type, payload) {
     return new Promise((resolve, reject) => {
       chrome.runtime.sendMessage({ type, payload }, (res) => {
@@ -662,13 +712,18 @@
     });
   }
 
-  // Report furniture, not data: text boxes, navigation buttons, decorative
-  // shapes and images, and slicers (a filter control, not a chart). Each one can
-  // carry a title, so title alone would turn a nav button into a liveboard tile.
+  // Report furniture: navigation buttons, decorative shapes and images, and
+  // slicers (a filter control, not a chart). None of these carries anything a
+  // liveboard can show, so they never become a tile. Text boxes are NOT here —
+  // their words are content, and they cross over as note tiles.
   const CHROME_VISUALS = new Set([
-    'textbox', 'actionButton', 'basicShape', 'shape', 'image', 'slicer',
-    'advancedSlicerVisual', 'qnaVisual',
+    'actionButton', 'basicShape', 'shape', 'image', 'slicer', 'advancedSlicerVisual',
   ]);
+
+  // Below this a text box is a label or a heading — "REGIONAL SALES", a page
+  // title — which is chrome the liveboard supplies for itself. Above it, the
+  // text is content: a narrative, a caption, an explanation worth carrying.
+  const TEXT_TILE_MIN_CHARS = 40;
 
   /** A name for a visual Power BI left untitled, from the data it is showing. */
   function nameFromColumns(columns, fallback) {
@@ -683,48 +738,102 @@
     return names[0] + ' details';
   }
 
-  /** Every data visual on the open page, with the rows it is actually showing. */
-  async function reportDatasets(note) {
-    const seen = new Set();
-    const visuals = [];
+  /** The report's pages, in the order the report lays them out. */
+  function reportPages() {
+    const pages = [];
+    layoutVisuals.forEach((v) => {
+      let page = pages.find((p) => p.section === v.section);
+      if (!page) {
+        page = { section: v.section, title: (v.sectionTitle || v.section), visuals: [] };
+        pages.push(page);
+      }
+      page.visuals.push(v);
+    });
+    return pages;
+  }
+
+  /** What each visual on the open page is currently showing, by visual id. */
+  function renderedText() {
+    const byId = new Map();
     canvasVisuals().forEach((cv) => {
       const layout = matched.get(cv.el);
-      if (!layout || !layout.visualId || seen.has(layout.visualId)) return;
-      if (CHROME_VISUALS.has(layout.visualType)) return;
-      seen.add(layout.visualId);
-      visuals.push({
-        visualId: layout.visualId,
-        // A Power BI title is optional. Fall back to the name the report gives
-        // the visual internally, then to its own columns once the rows come
-        // back — anything but dropping it.
-        title: cv.title || (layout.title || '').trim(),
-        visualType: layout.visualType,
-        roles: layout.roles ? Object.keys(layout.roles) : null,
+      if (layout && layout.visualId && cv.container) {
+        byId.set(layout.visualId, (cv.container.innerText || '').trim());
+      }
+    });
+    return byId;
+  }
+
+  /**
+   * Every visual in the report, page by page, with the rows it is showing.
+   *
+   * Power BI renders one page at a time, so only the open page has issued its
+   * queries — the rest are read by replaying the query each visual definition
+   * carries. A visual that answers no query but holds words becomes a note tile
+   * instead of being dropped.
+   */
+  async function reportDatasets(note) {
+    const pages = reportPages();
+    if (!pages.length) throw new Error('the report layout has not loaded yet');
+    const rendered = renderedText();
+    const wanted = [];
+    pages.forEach((page) => {
+      const seen = new Set();
+      page.visuals.forEach((v) => {
+        if (!v.visualId || seen.has(v.visualId)) return;
+        if (CHROME_VISUALS.has(v.visualType)) return;
+        seen.add(v.visualId);
+        // A visual that is on screen shows its own text — which is the only way
+        // to read a narrative, whose words are generated rather than authored.
+        const shown = rendered.get(v.visualId) || '';
+        const authored = (v.text || '').trim();
+        wanted.push({
+          page: page.title,
+          visualId: v.visualId,
+          title: (v.title || '').trim(),
+          visualType: v.visualType,
+          roles: v.roles ? Object.keys(v.roles) : null,
+          hasQuery: Boolean(v.prototypeQuery),
+          text: shown.length > authored.length ? shown : authored,
+        });
       });
     });
-    if (!visuals.length) throw new Error('no data visuals on this page');
-
-    const skipped = [];
+    if (!wanted.length) throw new Error('the report has no visuals to build from');
 
     const datasets = [];
-    for (let i = 0; i < visuals.length; i += 1) {
-      const v = visuals[i];
+    const skipped = [];
+    for (let i = 0; i < wanted.length; i += 1) {
+      const v = wanted[i];
       const label = v.title || v.visualType || 'visual ' + (i + 1);
-      note((i + 1) + ' of ' + visuals.length + ': ' + label);
+      note((i + 1) + ' of ' + wanted.length + ' · ' + v.page + ' · ' + label);
+
+      const asNote = () => {
+        if (v.text.length < TEXT_TILE_MIN_CHARS) return false;
+        datasets.push({ page: v.page, title: v.title || 'Note', text: v.text });
+        return true;
+      };
+
+      // No query at all: it is a text box or a caption, so take the words.
+      if (!v.hasQuery) {
+        if (!asNote()) skipped.push(label);
+        continue;
+      }
+
       let result;
       try {
         result = await requestData(v.visualId, 'summary', MAX_LOAD_ROWS);
       } catch (err) {
-        // One unreadable visual should not cost the whole liveboard. Power BI's
-        // AI visuals (Key influencers, decomposition tree, Q&A) answer no data
-        // query at all, so this is where they drop out — named, not silently.
-        console.warn('[Power BI Spotter] skipping "' + label + '":', err.message);
-        skipped.push(label);
+        console.warn('[Power BI Spotter] no data for "' + label + '":', err.message);
+        if (!asNote()) skipped.push(label);
         continue;
       }
       const rows = result.rawRows || result.rows || [];
-      if (!result.columns || !result.columns.length || !rows.length) { skipped.push(label); continue; }
+      if (!result.columns || !result.columns.length || !rows.length) {
+        if (!asNote()) skipped.push(label);
+        continue;
+      }
       datasets.push({
+        page: v.page,
         title: v.title || nameFromColumns(result.columns, label),
         // Lets the liveboard draw each tile the way the source visual is drawn.
         visualType: v.visualType || undefined,
@@ -735,19 +844,19 @@
         rows: rows.map((row) => row.map(loadableValue)),
       });
     }
-    if (!datasets.length) throw new Error('none of the data visuals on this page returned rows');
-    // Surfaced by the caller, so a page that could not be mirrored in full says
-    // which visuals are missing instead of quietly building a shorter board.
+    if (!datasets.length) throw new Error('none of the visuals in this report returned anything');
+    // Surfaced by the caller, so a report that could not be mirrored in full
+    // says which visuals are missing instead of quietly building a shorter board.
     datasets.skipped = skipped;
     return datasets;
   }
 
   async function buildLiveboard(context, setStep) {
     if (!context.reportId) throw new Error('no report id for this view');
-    // Keyed on the report AND the open page. Keyed on the report alone, the
-    // first page built won the cache and every other page reopened it — the
-    // tiles were read from whichever page happened to be open first.
-    const guid = context.pageName ? context.reportId + ':' + context.pageName : context.reportId;
+    // One liveboard per report, with a tab per page — so the key is the report.
+    // It was briefly keyed on the open page too, back when a build could only
+    // read the page on screen.
+    const guid = context.reportId;
 
     setStep('check', 'active');
     const found = await ask(GET_LIVEBOARD, { platform: PLATFORM, guid });
@@ -759,22 +868,33 @@
     }
     setStep('check', 'done', 'not built yet');
 
-    // The liveboard mirrors the report, so it is built from every visual's real
-    // rows — one tile per visual. The semantic model alone would describe the
+    // The liveboard mirrors the whole report — every page, every visual — so it
+    // is built from real rows. The semantic model alone would describe the
     // columns but carry no data, and every tile would read "No data found".
     setStep('read', 'active');
     const datasets = await reportDatasets((detail) => setStep('read', 'active', detail));
     const missed = datasets.skipped || [];
-    setStep('read', 'done', datasets.length + ' visuals'
-      + (missed.length ? ' (' + missed.length + ' with no queryable data)' : ''));
+    const pageCount = new Set(datasets.map((d) => d.page)).size;
+    setStep('read', 'done', datasets.length + ' visuals across ' + pageCount + ' pages'
+      + (missed.length ? ' (' + missed.length + ' with nothing to show)' : ''));
     if (missed.length) console.warn('[Power BI Spotter] not on the liveboard:', missed.join(', '));
 
     setStep('build', 'active', 'loading ' + datasets.length + ' datasets');
     // No `name`: the route keys on it when present, while /get-liveboard keys on
     // the guid, so passing a title made the two disagree and the reuse check
     // never matched what had been built.
-    const built = await ask(CREATE_LIVEBOARD, { platform: PLATFORM, guid, datasets });
-    const body = built.body || {};
+    let loadedCount = 0;
+    const body = await streamBuildPort(LIVEBOARD_STREAM,
+      { platform: PLATFORM, guid, datasets },
+      (event) => {
+        // load-data[N] fires per source; the rest are one-off pipeline stages.
+        if (/^load-data\[/.test(event.stage || '') && event.status === 'ok') {
+          loadedCount += 1;
+          setStep('build', 'active', loadedCount + ' of ' + datasets.length + ' loaded');
+        } else if (event.stage === 'generate' || event.stage === 'import') {
+          setStep('build', 'active', 'assembling the liveboard');
+        }
+      });
     if (body.liveboardId) setStep('build', 'done');
     if (!body.liveboardId) {
       const failed = (body.stages || []).find((st) => st.status === 'failed');
