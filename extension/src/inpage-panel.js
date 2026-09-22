@@ -16,7 +16,6 @@ const EMBED_TOKEN = 'spotter:embed-token';
 const EMBEDS = { tableau: TableauSpotterEmbed, powerbi: PowerBiSpotterEmbed };
 const LIVEBOARDS = { tableau: TableauLiveboardEmbed, powerbi: PowerBiLiveboardEmbed };
 const CONFIGS = { tableau: tableauConfig, powerbi: powerBiConfig };
-const LIVEBOARDS = { tableau: TableauLiveboardEmbed, powerbi: PowerBiLiveboardEmbed };
 const SUBJECT = {
   tableau: (c) => [c.worksheet, c.dashboard || c.workbook],
   powerbi: (c) => [c.visualTitle, c.reportTitle],
@@ -36,6 +35,47 @@ function requestEmbedToken(context) {
       resolve(res.token);
     });
   });
+}
+
+/** Progress checklist, same shape the platform content scripts use. */
+function buildChecklist(container, title, defs) {
+  container.textContent = '';
+  const wrap = document.createElement('div');
+  wrap.className = 'ts-spotter-steps ts-spotter-steps-panel';
+  const heading = document.createElement('div');
+  heading.className = 'ts-spotter-steps-title';
+  heading.textContent = title;
+  wrap.appendChild(heading);
+  const rows = {};
+  defs.forEach((step) => {
+    const row = document.createElement('div');
+    row.className = 'ts-spotter-step';
+    row.dataset.state = 'pending';
+    const icon = document.createElement('span');
+    icon.className = 'ts-spotter-step-icon';
+    const label = document.createElement('span');
+    label.className = 'ts-spotter-step-label';
+    label.textContent = step.label;
+    row.append(icon, label);
+    wrap.appendChild(row);
+    rows[step.key] = row;
+  });
+  container.appendChild(wrap);
+  return (key, state) => {
+    // Finishing a step implies the ones before it finished too.
+    const order = defs.map((d) => d.key);
+    const at = order.indexOf(key);
+    order.forEach((k, i) => {
+      if (i < at) rows[k].dataset.state = 'done';
+    });
+    if (rows[key]) rows[key].dataset.state = state;
+    if (state === 'active' && at + 1 < order.length) rows[order[at + 1]].dataset.state = 'pending';
+  };
+}
+
+function clearChecklist(host) {
+  const progress = host.querySelector('.ts-spotter-inpage-progress');
+  if (progress) progress.remove();
 }
 
 let mounted = null;
@@ -63,7 +103,8 @@ export async function openSpotterPanel(context, hostClass) {
   const cfg = CONFIGS[platform];
 
   const host = document.createElement('aside');
-  host.className = (hostClass || '') + ' ts-spotter-inpage';
+  host.className = (hostClass || '') + ' ts-spotter-inpage'
+    + (isLiveboard ? ' ts-spotter-inpage-wide' : '');
   // Same palette the embed is themed with, so our chrome and Spotter's UI are
   // one surface rather than two. Single source: ui/configs/<platform>-config.js.
   const c = cfg.colors;
@@ -77,6 +118,7 @@ export async function openSpotterPanel(context, hostClass) {
     + '<span class="ts-spotter-inpage-subject"></span>'
     + '<button type="button" class="ts-spotter-inpage-close" aria-label="Close ' + noun + '">&times;</button></header>'
     + '<div class="ts-spotter-inpage-status" hidden></div>'
+    + '<div class="ts-spotter-inpage-progress"></div>'
     + '<div class="ts-spotter-embed-mount"></div>';
   document.body.appendChild(host);
   mounted = host;
@@ -94,21 +136,26 @@ export async function openSpotterPanel(context, hostClass) {
   host.querySelector('.ts-spotter-inpage-subject').textContent = bits.join(' · ');
 
   currentContext = context;
-  showStatus('Connecting to ThoughtSpot…', false);
-  // init() is global to the page, so only ever call it once.
-  if (!inited) {
-    initSpotter({ thoughtSpotHost: thoughtSpotConfig.host, getAuthToken: () => requestEmbedToken(context) });
-    inited = true;
-  }
+  // A checklist rather than a bare "Connecting…" line, so the wait says what is
+  // happening. It lives in the embed mount and is replaced by the embed itself.
+  const steps = buildChecklist(host.querySelector('.ts-spotter-inpage-progress'),
+    isLiveboard ? 'Opening your Liveboard' : 'Setting up Spotter',
+    isLiveboard
+      ? [{ key: 'auth', label: 'Signing in to ThoughtSpot' }, { key: 'open', label: 'Loading the liveboard' }]
+      : [{ key: 'auth', label: 'Signing in to ThoughtSpot' },
+         { key: 'model', label: 'Attaching your data model' },
+         { key: 'open', label: 'Starting Spotter' }]);
+  steps('auth', 'active');
 
   // Liveboard mode: the caller built or reused one and passed its id.
   if (context.liveboardId) {
     const lb = new LIVEBOARDS[platform](host.querySelector('.ts-spotter-embed-mount'), { liveboardId: context.liveboardId });
-    lb.on('load', () => showStatus('', false));
+    lb.on('load', () => { steps('open', 'done'); clearChecklist(host); });
     lb.on('error', (payload) => {
       console.error('LiveboardEmbed error', payload);
       showStatus('The liveboard could not load.', true);
     });
+    steps('open', 'active');
     try {
       await lb.render();
     } catch (err) {
@@ -125,7 +172,9 @@ export async function openSpotterPanel(context, hostClass) {
     return;
   }
 
-  embed.on('load', () => showStatus('', false));
+  steps('model', 'active');
+  const embed = new EMBEDS[platform](host.querySelector('.ts-spotter-embed-mount'), { worksheetId: context.worksheetId });
+  embed.on('load', () => { steps('open', 'done'); clearChecklist(host); });
   embed.on('error', (payload) => {
     console.error(noun + ' embed error', payload);
     showStatus(noun + ' could not load.', true);

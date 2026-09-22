@@ -6,6 +6,7 @@ import { parseTmdlColumns } from '../powerbi';
 import { generateTml, generateLiveboardTml, generateLiveboardOverSources } from '../tml';
 import type { LiveboardSource } from '../tml';
 import { importTml, findGuid, importErrors, findMetadataId, shareMetadata } from '../thoughtspot';
+import { liveboardKey, buildLiveboard } from '../liveboard-pipeline';
 import type { Deps } from '../deps';
 
 // Each source platform declares its modeling language and how to read columns.
@@ -375,6 +376,8 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
     }
 
 
+    let structure: WorkbookStructure | null = null;
+
     // Data path: load real rows via the CSV pipeline, then build the liveboard
     // on that populated worksheet.
     if (rows && tsEnv) {
@@ -385,6 +388,12 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
       } catch (e) {
         console.error('[create-liveboard] structure parse failed:', (e as Error).message);
       }
+    }
+
+    // Everything below talks to the cluster, so stop here rather than passing a
+    // null env down the pipeline.
+    if (!tsEnv) {
+      return c.json({ error: 'not_configured', detail: 'TS_HOST and TS_TOKEN must be set to build a liveboard', stages }, 503);
     }
 
     const hostBase = options.tsHost!.replace(/\/$/, '');
