@@ -16,6 +16,11 @@ const EMBED_TOKEN = 'spotter:embed-token';
 const EMBEDS = { tableau: TableauSpotterEmbed, powerbi: PowerBiSpotterEmbed };
 const LIVEBOARDS = { tableau: TableauLiveboardEmbed, powerbi: PowerBiLiveboardEmbed };
 const CONFIGS = { tableau: tableauConfig, powerbi: powerBiConfig };
+// Where each app draws its report, so the panel can line up with it.
+const CANVAS_SELECTOR = {
+  powerbi: '.displayAreaContainer, .displayArea',
+  tableau: '.tabCanvas, .tab-zone-wrapper',
+};
 const SUBJECT = {
   tableau: (c) => [c.worksheet, c.dashboard || c.workbook],
   powerbi: (c) => [c.visualTitle || c.pageTitle, c.reportTitle],
@@ -104,6 +109,15 @@ export async function openSpotterPanel(context, hostClass) {
 
   const host = document.createElement('aside');
   host.className = (hostClass || '') + ' ts-spotter-inpage';
+  // Sit inside the host app's content area rather than over its chrome, so the
+  // panel reads as one of its own side panes instead of a window laid on top.
+  // The app's toolbar and nav stay reachable while the panel is open.
+  const dock = document.querySelector(CANVAS_SELECTOR[platform] || '');
+  const dockRect = dock && dock.getBoundingClientRect();
+  if (dockRect && dockRect.top > 0 && dockRect.height > 120) {
+    host.style.top = Math.round(dockRect.top) + 'px';
+    host.style.height = 'calc(100vh - ' + Math.round(dockRect.top) + 'px)';
+  }
   // Same palette the embed is themed with, so our chrome and Spotter's UI are
   // one surface rather than two. Single source: ui/configs/<platform>-config.js.
   const c = cfg.colors;

@@ -15,6 +15,44 @@ const q = (s: string): string => s.replace(/"/g, '\\"');
 const DB_NAME = 'spotter_everywhere';
 const SCHEMA_NAME = 'falcon_default_schema';
 
+/**
+ * Power BI's number format string, as ThoughtSpot column properties.
+ *
+ * Power BI formats are a superset of .NET's: `\$#,0.00;(\$#,0.00)` is money,
+ * `0.0%` a percentage, `#,0` a plain count. ThoughtSpot carries the same intent
+ * in `format_pattern` plus, for money, a `currency_type`. Without this a tile
+ * shows 4520554 where the report shows $4.52M, and a close rate reads 0.643
+ * instead of 64.3%.
+ */
+const CURRENCY_BY_SYMBOL: Record<string, string> = {
+  $: 'USD', '£': 'GBP', '€': 'EUR', '¥': 'JPY', '₹': 'INR', '₩': 'KRW', '₽': 'RUB', '₺': 'TRY',
+};
+
+export function formatProperties(format?: string): { pattern?: string; currency?: string } {
+  if (!format) return {};
+  // Only the positive clause matters; the rest restates it for negatives/zero.
+  const positive = format.split(';')[0] ?? '';
+  const fraction = (positive.match(/\.([0#]+)/) || [null, ''])[1] ?? '';
+  const decimals = fraction.length;
+  const grouped = positive.includes(',');
+  const digits = grouped ? '#,##0' : '0';
+  const body = decimals ? `${digits}.${'0'.repeat(decimals)}` : digits;
+  if (positive.includes('%')) return { pattern: `${body}%` };
+  const symbol = Object.keys(CURRENCY_BY_SYMBOL).find((sym) => positive.includes(sym));
+  if (symbol) return { pattern: body, currency: CURRENCY_BY_SYMBOL[symbol] };
+  return { pattern: body };
+}
+
+/** The `properties:` lines a column's format adds, if any. */
+function formatLines(column: Column, indent: string): string[] {
+  if (column.type !== 'MEASURE') return [];
+  const { pattern, currency } = formatProperties(column.format);
+  const lines: string[] = [];
+  if (pattern) lines.push(`${indent}format_pattern: "${pattern}"`);
+  if (currency) lines.push(`${indent}currency_type:`, `${indent}  iso_code: ${currency}`);
+  return lines;
+}
+
 export function generateTml(name: string, columns: Column[]): GeneratedTml {
   const tableName = `${name} Table`;
 
@@ -23,6 +61,7 @@ export function generateTml(name: string, columns: Column[]): GeneratedTml {
     `      db_column_name: ${c.id}`,
     '      properties:',
     `        column_type: ${c.type}`,
+    ...formatLines(c, '        '),
     '      db_column_properties:',
     `        data_type: ${c.dataType}`,
   ].join('\n')).join('\n');
@@ -51,6 +90,7 @@ export function generateTml(name: string, columns: Column[]): GeneratedTml {
     `      column_id: "${q(alias)}::${q(c.name)}"`,
     '      properties:',
     `        column_type: ${c.type}`,
+    ...formatLines(c, '        '),
   ].join('\n')).join('\n');
 
   const worksheetTml = [
@@ -446,6 +486,8 @@ export interface UploadedColumn {
   physicalName?: string;
   name?: string;
   dataType?: string;
+  /** The source tool's number format, carried over by the caller. */
+  format?: string;
 }
 
 /**
@@ -466,6 +508,7 @@ export function generateWorksheetOnTable(
       name: c.logicalName ?? c.name ?? '',
       dbName: c.physicalName ?? c.logicalName ?? c.name ?? '',
       dataType: c.dataType,
+      format: c.format,
     }))
     .filter((c) => c.name);
 
@@ -475,6 +518,7 @@ export function generateWorksheetOnTable(
       `    column_id: "${q(alias)}::${q(c.dbName)}"`,
       '    properties:',
       `      column_type: ${columnTypeFor(c.dataType)}`,
+      ...formatLines({ type: columnTypeFor(c.dataType), format: c.format } as Column, '      '),
     ].join('\n'))
     .join('\n');
 

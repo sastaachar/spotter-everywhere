@@ -9,6 +9,9 @@ export interface Column {
   name: string;
   type: 'ATTRIBUTE' | 'MEASURE';
   dataType: 'VARCHAR' | 'INT64' | 'DOUBLE' | 'DATE' | 'BOOL';
+  /** The source tool's number format string, translated on the way into TML so
+   *  a measure keeps its currency, percentage or decimals. */
+  format?: string;
 }
 
 const DATATYPE: Record<string, Column['dataType']> = {

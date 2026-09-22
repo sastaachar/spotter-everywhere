@@ -53,7 +53,7 @@ export interface Deps {
   maxBody: number;
   canAdmin(): boolean;
   adminEnv(): Promise<TsAdminEnv | null>;
-  loadDataset(env: TsAdminEnv, wsName: string, columns: { name: string }[], rows: unknown[][]): Promise<LoadedDataset>;
+  loadDataset(env: TsAdminEnv, wsName: string, columns: { name: string; format?: string }[], rows: unknown[][]): Promise<LoadedDataset>;
 }
 
 /**
@@ -89,7 +89,7 @@ export function makeDeps(options: AppOptions): Deps {
    * a worksheet on it, so a liveboard built on top has actual data. Idempotent:
    * reuses an existing worksheet of the same name.
    */
-  async function loadDataset(env: TsAdminEnv, wsName: string, columns: { name: string }[], rows: unknown[][]): Promise<LoadedDataset> {
+  async function loadDataset(env: TsAdminEnv, wsName: string, columns: { name: string; format?: string }[], rows: unknown[][]): Promise<LoadedDataset> {
     const tableName = `${wsName} Table`.slice(0, 90);
     const dataset = await uploadCsvDataset(env, rowsToCsv(columns, rows), tableName);
     const tableId = dataset.tableId ?? (await findMetadataId(env, tableName));
@@ -106,7 +106,15 @@ export function makeDeps(options: AppOptions): Deps {
       }
     }
     if (!worksheetId && dataset.loaded && dataset.columns.length && tableId) {
-      const imp = await importTml(env, [generateWorksheetOnTable(wsName, tableName, dataset.columns)]);
+      // Falcon reports the columns it created; the caller knows how the source
+      // formatted them. Carry the format across by name so a measure keeps its
+      // currency or percentage on the worksheet.
+      const formatByName = new Map(columns.filter((c) => c.format).map((c) => [c.name, c.format!]));
+      const withFormat = dataset.columns.map((c) => {
+        const name = c.logicalName ?? c.physicalName ?? '';
+        return formatByName.has(name) ? { ...c, format: formatByName.get(name) } : c;
+      });
+      const imp = await importTml(env, [generateWorksheetOnTable(wsName, tableName, withFormat)]);
       worksheetId = findGuid(imp, wsName) ?? (await findMetadataId(env, wsName, 'LOGICAL_TABLE'));
     }
     const groups = options.tsUserGroups ?? [];

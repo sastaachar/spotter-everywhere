@@ -193,7 +193,7 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
     let dataInput: { columns: { name: string; type?: string; dataType?: string }[]; rows: unknown[][] } | null = null;
     // One entry per source visual: the liveboard gets a tile per visual, each
     // answering from a worksheet loaded with that visual's own rows.
-    let datasetsInput: { title: string; visualType?: string; roles?: string[]; page?: string; text?: string; columns: { name: string }[]; rows: unknown[][] }[] = [];
+    let datasetsInput: { title: string; visualType?: string; roles?: string[]; page?: string; text?: string; columns: { name: string; format?: string }[]; rows: unknown[][] }[] = [];
     if (ct.includes('multipart/form-data')) {
       const form = await c.req.formData();
       platform = String(form.get('platform') ?? '');
@@ -217,7 +217,7 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
       const d = b.data as { columns?: { name: string; type?: string; dataType?: string }[]; rows?: unknown[][] } | undefined;
       if (d && Array.isArray(d.columns) && Array.isArray(d.rows)) dataInput = { columns: d.columns, rows: d.rows };
       if (Array.isArray(b.datasets)) {
-        datasetsInput = (b.datasets as { title?: string; name?: string; visualType?: string; roles?: string[]; page?: string; text?: string; columns?: { name: string }[]; rows?: unknown[][] }[])
+        datasetsInput = (b.datasets as { title?: string; name?: string; visualType?: string; roles?: string[]; page?: string; text?: string; columns?: { name: string; format?: string }[]; rows?: unknown[][] }[])
           // A note tile carries words and no rows, so it cannot be held to the
           // same shape as a source that becomes a worksheet.
           .filter((d2) => d2 && (typeof d2.text === 'string'
@@ -374,6 +374,7 @@ export function registerLiveboardRoutes(app: Hono, deps: Deps): void {
             name: col.name,
             type: numeric[ci] ? 'MEASURE' : 'ATTRIBUTE',
             dataType: numeric[ci] ? 'DOUBLE' : 'VARCHAR',
+            format: col.format,
           })),
         });
       }
