@@ -8,7 +8,6 @@
   const VISUAL_CONTAINER_SELECTOR = '.visualContainer';
   const INJECTED_ATTR = 'data-ts-spotter';
   const BUTTON_CLASS = 'ts-spotter-btn';
-  const TAB_BUTTON_CLASS = 'ts-spotter-tab-btn';
   const LAYER_CLASS = 'ts-spotter-layer';
   const PANEL_CLASS = 'ts-spotter-panel';
   const OPEN_EVENT = 'spotter:open';
@@ -387,88 +386,6 @@
     }
   }
 
-  // The report's own tab strip, whatever shape it takes. A report builds its
-  // tabs from button visuals, and how a button gets you to its page — page
-  // navigation, a bookmark, a drill-through — is its own business and is not
-  // always declared anywhere readable. So rather than decoding the target, the
-  // chip presses the report's button and builds whatever page that lands on.
-  // That works for every navigation style, including ones not seen yet.
-  const MIN_TAB_BUTTON_WIDTH = 60;
-  const tabChips = new Map();
-
-  function tabButtons() {
-    return canvasVisuals().filter((cv) => {
-      const layout = matched.get(cv.el);
-      if (!layout || layout.visualType !== 'actionButton' || !layout.label) return false;
-      // The narrow ones are scroll helpers stacked down the side of a visual.
-      return cv.rect.w >= MIN_TAB_BUTTON_WIDTH;
-    });
-  }
-
-  /**
-   * Press one of the report's own buttons, the way a person would.
-   *
-   * A synthetic `click` on the container does nothing: Power BI's buttons listen
-   * for the pointer sequence, and the element that handles it is not the one the
-   * layout describes. So aim at the middle of the button, ask the document what
-   * is actually there, and send that element the full sequence. The chip layer
-   * is lifted out of the way first or it would answer instead of the report.
-   */
-  function pressReportButton(cv) {
-    const layer = document.querySelector('.' + LAYER_CLASS);
-    const wasDisplay = layer ? layer.style.display : null;
-    if (layer) layer.style.display = 'none';
-    const x = cv.rect.x + cv.rect.w / 2;
-    const y = cv.rect.y + cv.rect.h / 2;
-    const target = document.elementFromPoint(x, y) || cv.container || cv.el;
-    if (layer) layer.style.display = wasDisplay;
-    const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0 };
-    ['pointerover', 'pointerenter', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']
-      .forEach((type) => {
-        const Ctor = type.startsWith('pointer') && window.PointerEvent ? PointerEvent : MouseEvent;
-        target.dispatchEvent(new Ctor(type, type.startsWith('pointer')
-          ? { ...opts, pointerId: 1, pointerType: 'mouse', isPrimary: true }
-          : opts));
-      });
-  }
-
-  /** Wait for the report to finish moving to another page. */
-  function pageSettled(before) {
-    return new Promise((resolve) => {
-      const started = Date.now();
-      const tick = () => {
-        const moved = currentPageName() !== before;
-        // Give the new page a moment to lay its visuals out before reading it.
-        if (moved) return setTimeout(resolve, 1200);
-        if (Date.now() - started > 4000) return resolve();
-        setTimeout(tick, 200);
-      };
-      tick();
-    });
-  }
-
-  function buildTabChip(cv) {
-    const layout = matched.get(cv.el);
-    const chip = document.createElement('button');
-    chip.type = 'button';
-    chip.className = TAB_BUTTON_CLASS;
-    chip.title = 'Build a Liveboard for "' + layout.label + '"';
-    chip.setAttribute('aria-label', 'Build a Liveboard for ' + layout.label);
-    chip.innerHTML = SPARKLE_SVG;
-    chip.addEventListener('click', async (ev) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      if (chip.disabled) return;
-      const before = currentPageName();
-      chip.disabled = true;
-      pressReportButton(cv);
-      await pageSettled(before);
-      chip.disabled = false;
-      runLiveboard(chip);
-    });
-    return chip;
-  }
-
   /** Report-level context: the page, not any single visual. */
   function reportContext() {
     const pathMatch = location.pathname.match(REPORT_PATH_PATTERN) || [];
@@ -525,8 +442,11 @@
     if (!onCanvas) return;
     const w = btn.offsetWidth || 52;
     const h = btn.offsetHeight || 16;
-    btn.style.left = Math.round(r.right - w - frame.left) + 'px';
-    btn.style.top = Math.round(r.top + (r.height - h) / 2 - frame.top) + 'px';
+    // Inset from the title's edges. Flush against them the button sat on the
+    // visual's own border and looked like it was falling out of the tile.
+    const EDGE = 6;
+    btn.style.left = Math.round(r.right - w - EDGE - frame.left) + 'px';
+    btn.style.top = Math.round(r.top + (r.height - h) / 2 + 3 - frame.top) + 'px';
   }
 
   function sync() {
@@ -550,46 +470,12 @@
       placed.delete(titleEl);
     });
 
-    const liveTabs = new Set();
-    tabButtons().forEach((cv) => {
-      liveTabs.add(cv.el);
-      let chip = tabChips.get(cv.el);
-      if (!chip) {
-        chip = buildTabChip(cv);
-        layer.appendChild(chip);
-        tabChips.set(cv.el, chip);
-      }
-      positionChip(chip, cv.rect, frame);
-    });
-    tabChips.forEach((chip, el) => {
-      if (liveTabs.has(el) && el.isConnected) return;
-      chip.remove();
-      tabChips.delete(el);
-    });
-  }
-
-  /** Pin a tab chip to the top-right corner of its tab button. */
-  function positionChip(chip, rect, frame) {
-    const onCanvas = frame
-      && rect.w > 0 && rect.h > 0
-      && rect.y + rect.h > frame.top && rect.y < frame.bottom
-      && rect.x + rect.w > frame.left && rect.x < frame.right;
-    chip.style.display = onCanvas ? 'inline-flex' : 'none';
-    if (!onCanvas) return;
-    const w = chip.offsetWidth || 18;
-    chip.style.left = Math.round(rect.x + rect.w - w - 2 - frame.left) + 'px';
-    chip.style.top = Math.round(rect.y + 2 - frame.top) + 'px';
   }
 
   function reposition() {
     const frame = frameLayer(ensureLayer());
     placed.forEach((btn, titleEl) => {
       if (titleEl.isConnected) position(btn, titleEl, frame);
-    });
-    tabChips.forEach((chip, el) => {
-      if (!el.isConnected) return;
-      const rect = screenRect(el.querySelector(VISUAL_CONTAINER_SELECTOR)) || screenRect(el);
-      if (rect) positionChip(chip, rect, frame);
     });
   }
 
@@ -841,6 +727,12 @@
     'actionButton', 'basicShape', 'shape', 'image', 'slicer', 'advancedSlicerVisual',
   ]);
 
+  // Visuals that are one number. A liveboard of headline figures repeats what
+  // the report already says and plots nothing, so these are left out: only what
+  // is worth drawing gets drawn. It also saves a worksheet per card, which is
+  // most of the wait on a page built largely of them.
+  const SINGLE_VALUE_VISUALS = new Set(['card', 'kpi', 'multiRowCard', 'gauge']);
+
   // Below this a text box is a label or a heading — "REGIONAL SALES", a page
   // title — which is chrome the liveboard supplies for itself. Above it, the
   // text is content: a narrative, a caption, an explanation worth carrying.
@@ -907,6 +799,7 @@
       page.visuals.forEach((v) => {
         if (!v.visualId || seen.has(v.visualId)) return;
         if (CHROME_VISUALS.has(v.visualType)) return;
+        if (SINGLE_VALUE_VISUALS.has(v.visualType)) return;
         seen.add(v.visualId);
         // A visual that is on screen shows its own text — which is the only way
         // to read a narrative, whose words are generated rather than authored.
@@ -966,6 +859,8 @@
         if (!asNote()) skipped.push(label);
         continue;
       }
+      // One row is a single data point whatever visual drew it — nothing to plot.
+      if (rows.length < 2) { skipped.push(label); continue; }
       datasets.push({
         page: v.page,
         title: distinct(v.title || nameFromColumns(result.columns, v.visualType, label)),
@@ -974,7 +869,9 @@
         // Visuals that share a type can still draw differently — a scatter with
         // a Size role is a bubble chart — so the roles travel with the type.
         roles: v.roles || undefined,
-        columns: result.columns.map((c) => ({ name: c.name })),
+        // Power BI's format string travels with the column so the tile shows
+        // dollars as dollars and a ratio as a percentage, not a bare number.
+        columns: result.columns.map((c) => ({ name: c.name, format: c.format || undefined })),
         rows: rows.map((row) => row.map(loadableValue)),
       });
     }
