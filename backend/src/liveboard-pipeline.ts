@@ -5,8 +5,25 @@ import type { TsAdminEnv, LoadedDataset } from './deps';
 
 // Deterministic liveboard name from (platform, guid) alone, so /get-liveboard
 // and /create-liveboard agree on the reuse key without sharing any other state.
-export const liveboardKey = (platform: string, guid: string): string =>
-  `Spotter · ${platform} · ${guid}`.slice(0, 80);
+//
+// The generation ahead of it carries a version. A board is built once and then
+// reused forever, so a change to how tiles are generated would never reach the
+// boards already on the cluster; bumping this retires them and builds the page
+// again the next time it is asked for.
+//
+// v2: numbers abbreviate (US$11.43M, not US$11,429,826).
+const KEY_VERSION = 'v2';
+
+export const liveboardKey = (platform: string, guid: string): string => {
+  const full = `Spotter · ${KEY_VERSION} · ${platform} · ${guid}`;
+  if (full.length <= 80) return full;
+  // A page guid is "<report>:<section>" and the section's distinguishing part is
+  // at its end, so a plain truncation can hand two pages the same name and the
+  // second would reuse the first's board. The digest keeps them apart.
+  const digest = Array.from(guid)
+    .reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7).toString(36);
+  return `${full.slice(0, 79 - digest.length)}~${digest}`;
+};
 
 /** Progress events for the streaming /create-liveboard path. Same shape as the
  *  dataset pipeline: { stage, status: 'start'|'done'|'error', detail?, ...ids }. */

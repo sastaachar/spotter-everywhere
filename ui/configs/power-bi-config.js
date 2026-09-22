@@ -28,14 +28,15 @@ export const powerBiConfig = {
     '--ts-var-viz-title-font-family': '"Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif',
     '--ts-var-viz-description-color': '#605e5c',
   },
-  // A headline figure is set heavy enough to shout. There is no documented
-  // variable for its weight, so it is dialled back through a rule — which is
-  // why this is separate from cssVariables and why it fails quietly if
-  // ThoughtSpot renames the class.
+  // A headline figure is set heavy enough to shout: 700 at 28px, next to Power
+  // BI's own cards at 600. There is no documented variable for its weight, so
+  // it is dialled back through a rule — which is why this is separate from
+  // cssVariables. Both the test id and the class are read off the rendered
+  // tile; either alone would do, and a rename costs weight and nothing else.
   cssRules: {
-    '.bk-kpi-value, [data-testid="kpi-value"], .kpi-chart-value': {
+    '[data-testid="kpi_herodata"], .kpi-module__hero': {
       'font-weight': '600',
-      'letter-spacing': '-0.02em',
+      'letter-spacing': '-0.01em',
     },
   },
   viewConfig: {
