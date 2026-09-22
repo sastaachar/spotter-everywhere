@@ -166,8 +166,13 @@ const CHART_BY_VISUAL: Record<string, string> = {
   // Parts of a whole
   pieChart: 'PIE', donutChart: 'PIE', treemap: 'TREEMAP', funnel: 'FUNNEL',
   waterfallChart: 'WATERFALL', scatterChart: 'SCATTER',
-  // Geography
-  map: 'GEO_BUBBLE', filledMap: 'GEO_AREA', shapeMap: 'GEO_AREA', azureMap: 'GEO_BUBBLE',
+  // Geography. ThoughtSpot only plots a map from a column it has geo-configured
+  // (US State, ZIP, country…), and a column that arrived through the CSV upload
+  // has no such config — geo_config is silently dropped on import, so the tile
+  // renders empty. A bar of the same geography against the same measure is the
+  // closest thing that actually draws. Revisit when the pipeline can set a
+  // column's geo type.
+  map: 'BAR', filledMap: 'BAR', shapeMap: 'BAR', azureMap: 'BAR',
   // Grids
   tableEx: 'TABLE', pivotTable: 'TABLE', matrix: 'TABLE', slicer: 'TABLE',
 };
@@ -390,10 +395,10 @@ function chartFor(mark: string, dims: string[], measures: string[]): string {
   if (m === 'area') return 'AREA';
   if (m === 'circle') return 'COLUMN';
   if (m === 'pie') return 'PIE';
-  // Tableau draws filled maps with polygons; ThoughtSpot's equivalent is an
-  // area map, and a plotted point map is a bubble map.
-  if (m.includes('polygon')) return 'GEO_AREA';
-  if (m === 'map') return 'GEO_BUBBLE';
+  // Tableau's filled maps and point maps would map to GEO_AREA / GEO_BUBBLE,
+  // but the uploaded column carries no geo config so those render empty — see
+  // the note on CHART_BY_VISUAL. Bars of the same geography do draw.
+  if (m.includes('polygon') || m === 'map') return 'BAR';
   if (m === 'square') return 'HEATMAP';
   if (m === 'gantt') return 'BAR';
   if (m === 'bar') return 'COLUMN';
